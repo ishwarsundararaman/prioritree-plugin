@@ -41,6 +41,10 @@ Then start a new chat and say **Map my work**.
 
 Details and troubleshooting are in [INSTALL.md](INSTALL.md).
 
+## Privacy Policy
+
+The plugin and desk run on your computer and keep your map there. Optional online features store a copy of the map on our servers only if you turn them on. Read the full [Privacy Policy](PRIVACY.md). Questions: support@unsolved.network.
+
 ## Status
 
 This is an early release. It has been verified on Windows. Mac support and the in-chat panel in each
