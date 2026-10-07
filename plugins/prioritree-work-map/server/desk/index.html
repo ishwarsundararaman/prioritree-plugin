@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#087253"><link rel="manifest" href="/manifest.webmanifest"><link rel="icon" type="image/png" href="/icons/desk-192.png"><title>PrioriTree</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font:13px system-ui,sans-serif;background:#f3fbf7;color:#16223b}header{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 18px;border-bottom:1px solid #d6e9df;background:#fff}strong{font-size:18px;color:#087253}#desk-coverage{flex:1;min-width:240px;font-size:12px;color:#557568}button{font:inherit;border:1px solid #c3d9cf;border-radius:8px;padding:7px 11px;background:#fff;color:#16223b;cursor:pointer}button:disabled{cursor:default;opacity:.55}button:focus-visible,input:focus-visible{outline:3px solid #458af0;outline-offset:2px}#update-ai{background:#087253;border-color:#087253;color:#fff}label{display:flex;align-items:center;gap:5px;font-size:12px}#offline,#ai-run,#desk-message{margin:0;padding:9px 18px;font-size:12px;line-height:1.5}#offline{background:#fff8e8;color:#6b4d08;border-bottom:1px solid #e4c270}#ai-run{display:flex;gap:10px;align-items:center}#desk-message{color:#245cb0}iframe{border:0;width:100%;height:calc(100vh - 68px);min-height:600px;display:block}[hidden]{display:none!important}
+</style>  <script type="module" crossorigin src="./assets/index-BRlVy2Q1.js"></script>
+</head><body>
+<header><strong>PrioriTree</strong><span id="desk-coverage" role="status">Checking recent chats…</span><button id="update-ai" disabled>Update with AI</button><label><input id="autostart" type="checkbox" disabled>Start at login</label><button id="stop-engine" disabled>Stop PrioriTree</button></header>
+<p id="offline" role="status" hidden>PrioriTree isn't running. This is your last saved view. Ask your AI to open the desk to start it.</p>
+<div id="ai-run" hidden><span id="ai-run-message" role="status" aria-live="polite"></span><button id="cancel-ai" hidden>Cancel update</button></div>
+<p id="desk-message" role="status" aria-live="polite" hidden></p>
+<iframe id="app" title="PrioriTree work map" sandbox="allow-scripts"></iframe>
+</body></html>
