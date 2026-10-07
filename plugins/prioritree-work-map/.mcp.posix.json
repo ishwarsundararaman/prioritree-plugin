@@ -1,0 +1,26 @@
+{
+  "mcpServers": {
+    "prioritree_work_map": {
+      "command": "sh",
+      "args": [
+        "./scripts/launch-work-map.sh",
+        "codex"
+      ],
+      "cwd": ".",
+      "env_vars": [
+        "PATH",
+        "USERPROFILE",
+        "LOCALAPPDATA",
+        "APPDATA",
+        "HOME",
+        "CODEX_HOME",
+        "CODEX_CLI_PATH",
+        "CODEX_MCP_NODE_PATH",
+        "CODEX_MANAGED_PACKAGE_ROOT",
+        "PRIORITREE_CODEX_CLI",
+        "PRIORITREE_WORK_STORE_DIR"
+      ],
+      "tool_timeout_sec": 120
+    }
+  }
+}

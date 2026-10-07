@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "prioritree_work_map": {
+      "command": "sh",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/scripts/launch-work-map.sh",
+        "claude"
+      ]
+    }
+  }
+}

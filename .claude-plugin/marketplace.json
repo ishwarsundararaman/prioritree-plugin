@@ -1,0 +1,17 @@
+{
+  "name": "prioritree",
+  "owner": {
+    "name": "PrioriTree"
+  },
+  "metadata": {
+    "version": "1.8.0"
+  },
+  "plugins": [
+    {
+      "name": "prioritree-work-map",
+      "version": "1.8.0",
+      "description": "Map your local Codex work into goals, initiatives and honest progress.",
+      "source": "./plugins/prioritree-work-map-claude"
+    }
+  ]
+}

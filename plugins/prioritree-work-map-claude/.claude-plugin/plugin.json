@@ -1,0 +1,15 @@
+{
+  "name": "prioritree-work-map",
+  "version": "1.8.0",
+  "description": "Map your local Codex work into goals, initiatives and honest progress.",
+  "author": {
+    "name": "PrioriTree"
+  },
+  "keywords": [
+    "productivity",
+    "work-map",
+    "mcp-app"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json"
+}
