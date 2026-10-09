@@ -1,105 +1,87 @@
 # Install PrioriTree
 
-PrioriTree turns your local Codex chats into a work map: businesses, goals, initiatives and steps,
-with the user's decisions kept separate from AI claims. One bundled server serves all three hosts.
-You do not need the PrioriTree desktop app, a source checkout, or an `npm install` after installing.
+PrioriTree turns your local Codex chats into a work map: businesses, departments, initiatives and
+steps. What you decide is kept separate from what the AI claims. You don't need a desktop app, a
+source checkout or `npm install`.
 
+## Claude Desktop
+
+1. Download `prioritree.mcpb` from the
+   [latest release](https://github.com/ishwarsundararaman/prioritree-plugin/releases/latest).
+2. Open the file in Claude Desktop and click **Install**. You can also go to Settings →
+   Extensions → Advanced settings → Install Extension and select the file. Claude Desktop supplies
+   the Node runtime, so you don't need to install anything else.
+3. Start a new chat and say **work map**.
 
 ## Codex desktop app or CLI
-
-Run these commands in a terminal:
 
 ```text
 codex plugin marketplace add ishwarsundararaman/prioritree-plugin
 codex plugin add prioritree-work-map@prioritree
 ```
 
-Then start a new chat. The plugin uses Codex's supplied Node runtime. If your host has not supplied
-`CODEX_MCP_NODE_PATH`, update the host or use the documented alternate launcher configuration in
-the release package. Do not hardcode another user's Node path.
-
-The generated Codex marketplace currently selects the Windows launcher. For a macOS/Linux release,
-the release owner must select `plugins/prioritree-work-map/.mcp.posix.json` as that package's
-`.mcp.json` **before publishing the Git source**. This uses `sh` and the same host Node. A single
-automatic OS-selecting Codex configuration has not been established by the host's documented
-format; do not advertise the default Windows Git tree as verified on macOS/Linux.
+Then start a new chat and say **work map**. The plugin uses the Node runtime that Codex supplies.
 
 ## Claude Code
-
-In Claude Code, run:
 
 ```text
 /plugin marketplace add ishwarsundararaman/prioritree-plugin
 /plugin install prioritree-work-map@prioritree
 ```
 
-Restart Claude Code or start a fresh session if the new tools are not visible. Claude Code does not
-provide a Node runtime for this plugin: the launcher checks `node` on PATH, then Codex's bundled
-Node. If neither exists, install Node.js 22.12 or newer, reopen Claude Code so its PATH updates,
-and retry. You do not need to install server dependencies.
-
-The Claude launcher includes Windows and POSIX bodies. A release owner must preserve its executable
-Git mode for macOS/Linux. Explicit `.mcp.windows.json` and `.mcp.posix.json` variants are included
-for hosts that cannot launch the combined script directly. Native installs on these systems remain
-unverified; the Windows launcher and POSIX shell logic are checked using temporary fake runtimes.
-
-## Claude Desktop
-
-Download `prioritree.mcpb` from the [latest release](https://github.com/ishwarsundararaman/prioritree-plugin/releases/latest). Open it in Claude Desktop and approve the
-extension's local access when prompted. You can also use Settings → Extensions → Advanced settings
-→ Install Extension to select the file. Enable the extension and start a new conversation.
-Claude Desktop supplies Node for a `node` extension; no separate Node installation is needed.
-Do not unzip it into your host's configuration folders.
+Start a fresh session if the tools don't appear. Claude Code needs Node.js 22.12 or newer on your
+PATH. If Codex is installed, its bundled Node is used as a fallback.
 
 ## First run
 
-1. Say **Map my work**. In a host with a prompt picker, choose PrioriTree's **Map my work** prompt;
-   in Codex or Claude Code, the `work-map` skill carries the same workflow.
-2. The AI explains that it will read your local Codex projects and the chats active in the last
-   14 days, then asks for your OK. After you agree, it groups the evidence, proposes goals and
-   initiatives, and measures your own messages as attention.
-3. Say **Open my work map**. In a host that renders MCP Apps, `open_work_map` supplies the panel
-   inside the chat. Rank goals, correct misplaced initiatives, and accept or reject steps there.
-   AI completion reports are only claims until you accept them.
+1. **Say "work map".** The map opens straight away, inside the chat in apps that show panels, or
+   in a local desk window otherwise.
+2. **It builds itself, biggest project first.** It reads your local Codex chats from the last 14
+   days and summarises each one with your own Codex. Installing and invoking the plugin authorizes
+   this reading.
+3. **Move around the map.**
+   - Click a card to go deeper and use the up arrow to come back.
+   - Hover for a short description; click for the full details.
+   - Drag cards to reorder, double-click a name to rename it, and use **+ Add** to add a task.
+   - For anything else, such as accepting a step, pausing or approving, just say it in the chat.
+4. **Alerts and updates.**
+   - A red ⚠ appears only when work is waiting on something only you can do. It tells you exactly
+     what to do.
+   - Progress goes to the quiet bell.
 
-If no supported local Codex source is available, PrioriTree explains what is missing and offers
-**Try with sample data**. Say that phrase to run `try_sample_map`. The sample is clearly labelled,
-stays in memory, and never replaces your saved map. Restart the plugin session to return to real
-data. Starting the bundled server with `--fixture` also selects the sample.
+## Keeping the map current
 
-Only Codex history is supported today. Installing in Claude does not make Claude's own chats
-available. Install Codex locally if you want to map its history. For a nonstandard installation,
-set `PRIORITREE_CODEX_CLI` to the absolute Codex executable or its `codex.js` CLI entry; an explicit
-invalid path produces the explanation rather than silently selecting a different source.
+While PrioriTree's local engine runs, it starts on its own when Claude Desktop or Codex uses the
+plugin.
+- **Changed chats:** it notices them and re-reads each one about two minutes after it goes quiet,
+  using your own Codex.
+- **Morning update:** it does one at 07:00, or at the first start after 05:00 if your computer was
+  off.
+- **Your chats are untouched:** it never resumes, writes to or sends anything in your chats.
 
-Panel rendering and the real host install flows still need human verification. If a host cannot
-render MCP Apps, its model tools can give a text summary; try Claude Desktop or a Codex host with
-MCP Apps support for the panel. This plugin does not start a local web server.
+## Where things are stored
 
-## Local access and storage
+| System | Folder |
+|---|---|
+| Windows | `%USERPROFILE%\.prioritree\work-visibility` |
+| macOS | `~/Library/Application Support/PrioriTree/work-visibility` |
+| Linux | `$XDG_DATA_HOME/PrioriTree/work-visibility`, or `~/.local/share/PrioriTree/work-visibility` |
 
-The server reads local Codex project/chat metadata and, during setup or an evidence request, chat
-messages through a read-only Codex app-server client. It never resumes a chat or starts a model
-turn in the source. It may read Codex's saved project assignments to recover older membership.
-It does not read Claude history, change Codex/Claude configuration, install another plugin, or
-send your map to a PrioriTree cloud service.
+- **What's there:** the map (`snapshot.json`), its append-only history (`history.jsonl`), and
+  `diagnostics.log`. The log records request types, outcomes and timings, never chat content, and
+  rotates at about 1 MB.
+- **Moving it:** set `PRIORITREE_WORK_STORE_DIR` to use a different folder.
+- **Uninstalling:** keep the folder if you want your map back later.
+- **Earlier versions:** on first open, a map from an earlier version is copied into the new folder
+  automatically. The old copy is left untouched.
 
-The AI host receives the chat text returned by setup tools and applies its own data policy.
-The map's local storage does not make the host's AI processing offline.
+## Good to know
 
-On Windows, the saved map and append-only change history are in
-`%LOCALAPPDATA%\PrioriTree\work-visibility` (`snapshot.json`, `history.jsonl`, and brief journal/lock
-files while writing). With no `LOCALAPPDATA`, the current default is
-`~/AppData/Local/PrioriTree/work-visibility`, including on macOS/Linux. Set
-`PRIORITREE_WORK_STORE_DIR` in the server environment to choose another directory. Keep that
-directory when uninstalling if you want to recover your map later. Sample mode writes no store.
+- **Sources:** only Codex chats are read today. Claude's own chats aren't read yet.
+- **Platforms:** verified on Windows. The macOS and Linux launchers are included, but they haven't
+  been verified on real machines yet.
+- **No cloud:** there is no PrioriTree cloud sync in this version. Your map stays on your computer.
+  Your AI provider processes the chat text it summarises, under its own terms.
 
-There is no cloud sync, background refresh worker, or desk engine in this package.
-
-## For release reviewers
-
-Run `npm run build:plugin` from this app checkout to produce the unpublished release tree and
-desktop extension. Run `node scripts/probe-plugin.mjs` for the isolated stdio check. The probe
-copies only the bundled server into a temporary directory, sets a temporary store and absent
-Codex source, and closes and verifies its child processes. Do not install into a real host as
-part of this task. See [the handoff](handoffs/PLUGIN-2026-10-07.md) for exact checks and format sources.
+Questions or problems: open an [issue](https://github.com/ishwarsundararaman/prioritree-plugin/issues)
+or write to support@unsolved.network.

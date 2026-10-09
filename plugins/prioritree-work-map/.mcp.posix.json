@@ -18,7 +18,9 @@
         "CODEX_MCP_NODE_PATH",
         "CODEX_MANAGED_PACKAGE_ROOT",
         "PRIORITREE_CODEX_CLI",
-        "PRIORITREE_WORK_STORE_DIR"
+        "PRIORITREE_WORK_STORE_DIR",
+        "PRIORITREE_MORNING_HOUR",
+        "PRIORITREE_MORNING_MINUTE"
       ],
       "tool_timeout_sec": 120
     }

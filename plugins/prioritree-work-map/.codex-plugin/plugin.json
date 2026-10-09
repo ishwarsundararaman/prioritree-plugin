@@ -1,6 +1,6 @@
 {
   "name": "prioritree-work-map",
-  "version": "1.8.1",
+  "version": "1.13.3",
   "description": "Map your local Codex work into goals, initiatives and honest progress.",
   "author": {
     "name": "PrioriTree"
@@ -10,7 +10,7 @@
   "interface": {
     "displayName": "PrioriTree Work Map",
     "shortDescription": "Map your local Codex work into goals, initiatives and honest progress.",
-    "longDescription": "PrioriTree reads your local Codex projects and selected conversations to build a work map. Review the AI's proposals, accept or reject claims and keep decisions in your own local store. Includes an interactive MCP App, a setup skill and the Map my work prompt. No cloud sync or background execution.",
+    "longDescription": "PrioriTree reads your local Codex projects and selected conversations to build a work map. Review the AI's proposals, accept or reject claims and keep decisions in your own local store. Includes an interactive MCP App, a setup skill and the Map my work prompt. A single background engine re-reads changed Codex chats and checks them each morning. No cloud sync or task execution.",
     "developerName": "PrioriTree",
     "category": "Productivity",
     "capabilities": [

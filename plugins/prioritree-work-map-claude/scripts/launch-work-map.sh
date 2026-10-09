@@ -25,4 +25,5 @@ if [ -z "$node_path" ]; then
   exit 1
 fi
 script_dir=$(CDPATH= cd -- "${0%/*}" && pwd)
-exec "$node_path" "$script_dir/../server/work-map.mjs"
+if [ "$#" -gt 0 ]; then shift; fi
+exec "$node_path" "$script_dir/../server/work-map.mjs" "$@"

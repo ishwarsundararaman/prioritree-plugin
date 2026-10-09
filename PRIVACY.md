@@ -1,6 +1,6 @@
 # PrioriTree Privacy Policy
 
-_Last updated: 7 October 2026_
+_Last updated: 10 October 2026_
 
 This policy explains what information PrioriTree ("PrioriTree", "we", "us") handles when you use the
 PrioriTree plugin, desktop app and any related online services (together, the "Service"), and how that
@@ -17,6 +17,13 @@ information is used. We'll update it as the Service changes; see "Changes to thi
   (for example Codex or Claude) reads your chats to build or update the map, that processing happens
   inside your account with that provider. Their privacy terms apply to it.
 - **We don't sell your personal information.**
+- **Installing and invoking the plugin authorizes local history reading.** Setup uses Codex projects
+  and chats active in the last 14 days, including your messages and recent AI replies, to build and
+  save the map and its change history. It does not resume work in source chats. Your AI host receives
+  the bounded chat text used for setup under that provider's policy.
+- **The map keeps itself current.** While the local engine runs, it may re-read chats that changed,
+  and do a daily update, so the map and its alerts stay accurate. It uses your own AI provider for
+  any summaries, under that provider's terms. It never writes to your chats.
 
 ## Information we handle
 
@@ -29,7 +36,9 @@ From this it creates and stores the following on your device:
 
 - your work map: businesses, goals, initiatives, steps, status, and your decisions and corrections;
 - a history of changes to the map;
-- counts of your own messages, used to show where your effort went.
+- counts of your typed messages in the last 14 days, used to show where your attention went. AI activity and automated prompts are excluded.
+- request diagnostics (method, tool/resource name, outcome, duration, client/version and UI support),
+  without chat content; the log rotates at about 1 MB.
 
 **If you use online features.** When you choose to use a feature that works online, we may collect
 and store:
@@ -73,7 +82,7 @@ We share information only in these cases:
 ## Storage and retention
 
 - **Local data** stays on your device until you delete it. You can delete it by removing the
-  PrioriTree data folder. On Windows this is `%LOCALAPPDATA%\PrioriTree`.
+  PrioriTree data folder. On Windows this is `%USERPROFILE%\.prioritree`.
 - **Online data** is kept while your account or the relevant feature is active. You can ask us to
   delete your account and online data at any time. We'll then delete it within a reasonable period,
   except where we need to keep some information to meet legal obligations, resolve disputes or
