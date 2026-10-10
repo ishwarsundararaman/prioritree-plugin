@@ -9,8 +9,10 @@ source checkout or `npm install`.
 1. Download `prioritree.mcpb` from the
    [latest release](https://github.com/ishwarsundararaman/prioritree-plugin/releases/latest).
 2. Open the file in Claude Desktop and click **Install**. You can also go to Settings →
-   Extensions → Advanced settings → Install Extension and select the file. Claude Desktop supplies
-   the Node runtime, so you don't need to install anything else.
+   Extensions → Advanced settings → Install Extension and select the file. You don't need to
+   install anything else. PrioriTree's background engine uses Codex's Node runtime or Node.js on
+   your PATH when either is available. Otherwise, the map builds and updates while Claude Desktop
+   is open.
 3. Start a new chat and say **work map**.
 
 ## Codex desktop app or CLI
@@ -51,8 +53,9 @@ PATH. If Codex is installed, its bundled Node is used as a fallback.
 
 ## Keeping the map current
 
-While PrioriTree's local engine runs, it starts on its own when Claude Desktop or Codex uses the
-plugin.
+PrioriTree's local engine starts on its own when Claude Desktop or Codex uses the plugin. It builds
+the whole map by itself, and the chat you started it from doesn't need to stay open. If it's
+interrupted, it picks up where it left off.
 - **Changed chats:** it notices them and re-reads each one about two minutes after it goes quiet,
   using your own Codex.
 - **Morning update:** it does one at 07:00, or at the first start after 05:00 if your computer was
@@ -78,8 +81,9 @@ plugin.
 ## Good to know
 
 - **Sources:** only Codex chats are read today. Claude's own chats aren't read yet.
-- **Platforms:** verified on Windows. The macOS and Linux launchers are included, but they haven't
-  been verified on real machines yet.
+- **Platforms:** automated checks run the installed plugin on Windows, Mac and Linux.
+  - Claude Desktop works on Windows and Mac.
+  - Codex and Claude Code work on Windows. On Mac and Linux they need the next update.
 - **No cloud:** there is no PrioriTree cloud sync in this version. Your map stays on your computer.
   Your AI provider processes the chat text it summarises, under its own terms.
 

@@ -16,6 +16,14 @@ If the source fails, report the error briefly and follow the tool's repair/retry
 
 ## Build the map
 
+The engine builds the portfolio itself and continues after this chat ends. When
+`get_build_status` reports a running `buildDriver`, let it finish; host reading,
+business, goals and synthesis calls report its status without starting another run.
+The panel updates as results arrive. You do not need to keep calling tools.
+
+Use the host-assisted steps below only when the tool's guidance explicitly asks
+for recovery and no engine driver is active.
+
 1. `open_work_map` immediately. The panel shows "Building your PrioriTree…", lists real project
    metadata, and shows quiet Attention labels while it counts the user's typed messages over 14 days, excluding
    scheduled automations. Do not wait for the scan before opening the map.

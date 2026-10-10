@@ -6,7 +6,7 @@
   "plugins": [
     {
       "name": "prioritree-work-map",
-      "version": "1.13.3",
+      "version": "1.13.4",
       "source": {
         "source": "local",
         "path": "./plugins/prioritree-work-map"

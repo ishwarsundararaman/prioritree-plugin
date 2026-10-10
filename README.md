@@ -58,6 +58,11 @@ The plugin and desk run on your computer and keep your map there. Optional onlin
 
 ## Status
 
-This is an early release (1.13.3). It has been verified on Windows. Mac and Linux launchers are
-included, but they haven't been verified on real machines yet. Feedback is welcome in
-[Issues](https://github.com/ishwarsundararaman/prioritree-plugin/issues).
+This is an early release (1.13.4). Automated checks run the installed plugin on Windows, Mac
+(Apple silicon and Intel) and Linux:
+
+- **Claude Desktop** works on Windows and Mac.
+- **Codex and Claude Code** work on Windows. On Mac and Linux they need the next update, because
+  this release's launch command is Windows-only.
+
+Feedback is welcome in [Issues](https://github.com/ishwarsundararaman/prioritree-plugin/issues).
