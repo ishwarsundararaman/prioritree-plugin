@@ -1,14 +1,16 @@
-import { createRequire } from "node:module";
-const require2 = createRequire(import.meta.url);
-import { readFile, readlink, mkdtemp, mkdir, appendFile, copyFile, writeFile, rm, rename, stat, open, cp, unlink, readdir } from "node:fs/promises";
+import { createRequire as bundledCreateRequire } from "node:module";
+const require2 = bundledCreateRequire(import.meta.url);
+import { mkdir, appendFile, readFile, readlink, mkdtemp, copyFile, writeFile, rm, rename, stat, open, cp, unlink, readdir } from "node:fs/promises";
 import { join, win32, posix, resolve as resolve$1, relative, isAbsolute, basename, delimiter, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { pathToFileURL, fileURLToPath } from "node:url";
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createInterface } from "node:readline";
 import { createHash, randomUUID } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
 import { existsSync, realpathSync, watch, createReadStream } from "node:fs";
+import { Worker } from "node:worker_threads";
+import { createRequire } from "node:module";
 import { createServer as createServer$1 } from "node:http";
 import { createServer } from "node:net";
 import { deflateSync } from "node:zlib";
@@ -16,12 +18,15 @@ const widgetHtml = '<!doctype html>\n<html lang="en"><head><meta charset="UTF-8"
 const reads = /* @__PURE__ */ new Set(["project/list", "thread/list", "thread/read", "thread/items/list"]);
 const CODEX_READ_ARGS = ["app-server", "--stdio", "-c", "mcp_servers.prioritree_work_map.enabled=false", "-c", 'plugins."prioritree-work-map@prioritree".enabled=false'];
 class CodexReadClient {
-  constructor(exe, args = [...CODEX_READ_ARGS]) {
+  // A Windows source CLI must not share the host's console control boundary.
+  constructor(exe, args = [...CODEX_READ_ARGS], start = (exe2, args2) => spawn(exe2, args2, { stdio: ["pipe", "pipe", "pipe"], windowsHide: true, detached: process.platform === "win32" })) {
     this.exe = exe;
     this.args = args;
+    this.start = start;
   }
   exe;
   args;
+  start;
   child = null;
   lines = null;
   initializing = null;
@@ -36,7 +41,7 @@ class CodexReadClient {
     return this.raw(method, params);
   }
   async initialize() {
-    this.child = spawn(this.exe, this.args, { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+    this.child = this.start(this.exe, this.args);
     this.child.stderr.resume();
     this.child.stdin.on("error", () => {
       this.rejectPending(new Error("Codex source input closed"));
@@ -5119,51 +5124,106 @@ function preprocess(fn, schema2) {
     out: schema2
   });
 }
+const ITEM_SCAN_HEAD = 32768, ITEM_SCAN_TAIL = 8192, MAX_DENSE_RUN = 2e3, MAX_ARTIFACT_TOKEN = 300;
+function textWindows(value2) {
+  const text2 = String(value2 ?? "");
+  return text2.length <= ITEM_SCAN_HEAD + ITEM_SCAN_TAIL ? { text: text2, truncated: false } : { text: text2.slice(0, ITEM_SCAN_HEAD) + "\n[Item text omitted]\n" + text2.slice(-ITEM_SCAN_TAIL), truncated: true };
+}
+function withoutDenseRuns(text2) {
+  const parts = [];
+  let start = 0, dropped = 0;
+  for (let index = 0; index <= text2.length; index++) if (index === text2.length || text2.charCodeAt(index) <= 32) {
+    if (index - start > MAX_DENSE_RUN) {
+      parts.push("[Long non-whitespace run dropped]");
+      dropped++;
+    } else parts.push(text2.slice(start, index));
+    if (index < text2.length) parts.push(text2[index]);
+    start = index + 1;
+  }
+  return { text: parts.join(""), dropped };
+}
+function boundedScanText(value2) {
+  const window = textWindows(value2), clean = withoutDenseRuns(window.text);
+  return { ...clean, truncated: window.truncated };
+}
+function itemScanText(item) {
+  let head2 = "", tail = "", characters = 0, nodes = 0;
+  const stack = [item];
+  while (stack.length && nodes++ < 2048) {
+    const value2 = stack.pop();
+    if (typeof value2 === "string") {
+      const length = value2.length + 1;
+      characters += length;
+      if (head2.length < ITEM_SCAN_HEAD) head2 += (value2 + "\n").slice(0, ITEM_SCAN_HEAD - head2.length);
+      tail = (tail + value2.slice(-ITEM_SCAN_TAIL) + "\n").slice(-ITEM_SCAN_TAIL);
+    } else if (value2 && typeof value2 === "object") {
+      const keys = Object.keys(value2).slice(0, 2048);
+      for (let index = keys.length - 1; index >= 0; index--) stack.push(value2[keys[index]]);
+    }
+  }
+  const truncated = characters > ITEM_SCAN_HEAD + ITEM_SCAN_TAIL || stack.length > 0;
+  const text2 = characters <= ITEM_SCAN_HEAD ? head2 : head2 + (characters <= ITEM_SCAN_HEAD + ITEM_SCAN_TAIL ? tail.slice(-(characters - ITEM_SCAN_HEAD)) : "\n[Item text omitted]\n" + tail);
+  return { ...withoutDenseRuns(text2), truncated };
+}
 function assistantDone(text2, limit2 = 600) {
-  const paragraphs = String(text2 ?? "").split(/\n\s*\n/).map((value2) => value2.trim()).filter(Boolean);
+  const paragraphs = boundedScanText(text2).text.split(/\n\s*\n/).map((value2) => value2.trim()).filter(Boolean);
   const done = paragraphs.filter((value2) => /\b(?:implemented|fixed|created|added|changed|completed|built|tested|verified|passed|failed|blocked|ready|committed|merged|published|deployed|result|done|shipped|updated|removed|accepted|rejected)\b/i.test(value2));
   return (done.length ? done.join("\n\n") : paragraphs.join("\n\n")).slice(0, limit2);
 }
 function mechanicalArtifacts(items2, { limit: limit2 = 200, characters = 240 } = {}) {
   const result2 = [], seen = /* @__PURE__ */ new Set();
-  let found = 0;
+  let found = 0, boundedItems = 0, droppedRuns = 0;
+  const add = (value2) => {
+    value2 = value2.slice(0, characters);
+    if (seen.has(value2)) return;
+    seen.add(value2);
+    found++;
+    if (result2.length < limit2) result2.push(value2);
+  };
+  const extensions = new Set("ts tsx js jsx mjs cjs mts cts json md yaml yml css html sql py ps1 sh gradle xml csv pdf docx png mp4".split(" "));
   for (const item of items2) {
-    const raw = JSON.stringify(item);
-    const patterns = [/https?:\/\/[^\s"'<>\\]+/g, /\bPR\s*#?\d+\b|\bpull\/\d+\b|(?<![A-Za-z0-9_])#\d{1,6}\b/gi, /\b(?:[\w.-]+\/)*[\w.-]+\.(?:tsx?|jsx?|mjs|cjs|mts|cts|json|md|ya?ml|css|html|sql|py|ps1|sh|gradle|xml|csv|pdf|docx|png|mp4)\b/g, /\b(?:codex|feature|fix|feat|chore|release|hotfix)\/[A-Za-z0-9_./-]+/g];
-    for (const pattern2 of patterns) for (const match of raw.matchAll(pattern2)) {
-      const value2 = match[0].slice(0, characters);
-      if (seen.has(value2)) continue;
-      seen.add(value2);
-      found++;
-      if (result2.length < limit2) result2.push(value2);
+    const scan = itemScanText(item);
+    boundedItems += Number(scan.truncated);
+    droppedRuns += scan.dropped;
+    let previous = "";
+    for (let token of scan.text.split(/[\s"'<>()[\]{}\\]+/u)) {
+      if (!token || token.length > MAX_ARTIFACT_TOKEN) {
+        previous = "";
+        continue;
+      }
+      token = token.replace(/[.,;:!?]+$/u, "");
+      if (/^https?:\/\/[^\s]+$/i.test(token)) add(token);
+      if (/^#\d{1,6}$/.test(token) || /^pull\/\d+$/.test(token) || /^PR#?\d+$/i.test(token)) add(token);
+      if (previous.toUpperCase() === "PR" && /^#?\d+$/.test(token)) add(`PR ${token}`);
+      const extension = token.slice(token.lastIndexOf(".") + 1).toLowerCase();
+      if (extensions.has(extension) && /^[\w./-]+$/u.test(token)) add(token);
+      const slash = token.indexOf("/");
+      if (slash > 0 && ["codex", "feature", "fix", "feat", "chore", "release", "hotfix"].includes(token.slice(0, slash)) && /^[\w./-]+$/u.test(token)) add(token);
+      previous = token;
     }
     if (item.type === "commandExecution" || item.type === "command_execution") {
       const command = item.command ?? item.cmd;
-      if (typeof command === "string" && !seen.has(command)) {
-        seen.add(command);
-        found++;
-        if (result2.length < limit2) result2.push(`Command: ${command.slice(0, characters - 9)}`);
-      }
+      if (typeof command === "string") add(`Command: ${boundedScanText(command).text.slice(0, characters - 9)}`);
     }
   }
-  return { artifacts: result2, total: found, truncated: found > limit2 };
+  return { artifacts: result2, total: found, truncated: found > limit2, boundedItems, droppedRuns };
 }
 function compactThread(items2, { strategy = "B", userWords: userWords2 = (raw) => ({ text: String(raw ?? "").trim(), automated: false }), metadata: metadata2 = {} } = {}) {
   const users = [], assistants = [];
   let automated = 0, automatedTurn = false;
   for (const item of items2) {
     if (item.type === "userMessage") {
-      const words2 = userWords2((item.content ?? []).filter((part) => part.type === "text").map((part) => part.text ?? "").join("\n"));
+      const words2 = userWords2(itemScanText((item.content ?? []).filter((part) => part.type === "text").map((part) => part.text ?? "")).text.trim());
       automatedTurn = words2.automated;
       if (words2.automated) automated++;
       else if (words2.text) users.push(words2.text);
     }
-    if (item.type === "agentMessage" && item.text && !automatedTurn) assistants.push(item.text);
+    if (item.type === "agentMessage" && item.text && !automatedTurn) assistants.push(boundedScanText(item.text).text);
   }
-  const first = userWords2(metadata2.preview ?? ""), base = { sessionId: metadata2.sessionId ?? "", title: metadata2.title ?? "Untitled conversation", updatedAt: metadata2.updatedAt ?? "", firstAsk: (first.automated ? `Scheduled automation: ${metadata2.preview}` : first.text || metadata2.preview || "").slice(0, strategy === "A" ? 1500 : 600), automatedRuns: automated, readingStrategy: strategy };
+  const preview = boundedScanText(metadata2.preview ?? "").text, first = userWords2(preview), base = { sessionId: metadata2.sessionId ?? "", title: metadata2.title ?? "Untitled conversation", updatedAt: metadata2.updatedAt ?? "", firstAsk: (first.automated ? `Scheduled automation: ${preview}` : first.text || preview).slice(0, strategy === "A" ? 1500 : 600), automatedRuns: automated, readingStrategy: strategy };
   if (strategy === "A") return { ...base, userMessages: users.slice(-30).map((text2) => text2.slice(0, 1500)), latestAssistant: assistants.slice(-3).map((text2) => text2.slice(0, 2500)), coverage: `Latest ${items2.length} items · ${Math.min(users.length, 30)} of ${users.length} user messages (1500 characters each) · latest ${Math.min(assistants.length, 3)} AI replies (2500 characters each)${automated ? ` · ${automated} scheduled automation runs` : ""}` };
-  const index = items2.find((item) => item.type === "artifactIndex"), artifacts2 = index ? { artifacts: index.artifacts ?? [], total: index.total ?? index.artifacts?.length ?? 0, truncated: index.truncated ?? false } : mechanicalArtifacts(items2);
-  return { ...base, userMessages: users.map((text2) => text2.slice(0, 600)), assistantSummaries: assistants.map((text2, index2) => index2 === 0 ? text2.slice(0, 600) : assistantDone(text2)), latestAssistant: assistants.slice(-3), artifacts: artifacts2.artifacts, coverage: `Whole thread: ${items2.length} items · all ${users.length} user messages (600 characters each) · first AI reply and all ${assistants.length} AI summaries (600 characters each) · latest ${Math.min(assistants.length, 3)} AI replies in full · ${artifacts2.artifacts.length}/${artifacts2.total} mechanical artefacts${artifacts2.truncated ? " (list capped at 200)" : ""}${automated ? ` · ${automated} scheduled automation runs` : ""}` };
+  const index = items2.find((item) => item.type === "artifactIndex"), artifacts2 = index ? { artifacts: (index.artifacts ?? []).slice(0, 200).map((value2) => boundedScanText(value2).text.slice(0, 240)), total: index.total ?? index.artifacts?.length ?? 0, truncated: !!index.truncated || (index.artifacts?.length ?? 0) > 200 } : mechanicalArtifacts(items2);
+  return { ...base, userMessages: users.map((text2) => text2.slice(0, 600)), assistantSummaries: assistants.map((text2, index2) => index2 === 0 ? text2.slice(0, 600) : assistantDone(text2)), latestAssistant: assistants.slice(-3), artifacts: artifacts2.artifacts, coverage: `Whole thread: ${items2.length} items · all ${users.length} user messages (600 characters each) · first AI reply and all ${assistants.length} AI summaries (600 characters each) · latest ${Math.min(assistants.length, 3)} AI replies (bounded to 40 KiB per item) · ${artifacts2.artifacts.length}/${artifacts2.total} mechanical artefacts${artifacts2.truncated ? " (list capped at 200)" : ""}${artifacts2.boundedItems ? ` · ${artifacts2.boundedItems} items scanned using first 32 KiB and last 8 KiB` : ""}${artifacts2.droppedRuns ? ` · ${artifacts2.droppedRuns} long non-whitespace runs dropped` : ""}${automated ? ` · ${automated} scheduled automation runs` : ""}` };
 }
 function fullThreadChunks(items2, { userWords: userWords2 = (raw) => ({ text: String(raw ?? "").trim(), automated: false }), maxChars = 1e5 } = {}) {
   if (!Number.isInteger(maxChars) || maxChars < 1e3) throw new Error("Full-thread chunk budget must be at least 1000 characters");
@@ -5183,7 +5243,7 @@ function fullThreadChunks(items2, { userWords: userWords2 = (raw) => ({ text: St
   for (const message of messages) {
     let remaining = message.text;
     do {
-      if (JSON.stringify([...page, { ...message, text: remaining }]).length <= maxChars) {
+      if (remaining.length <= maxChars && JSON.stringify([...page, { ...message, text: remaining }]).length <= maxChars) {
         page.push({ ...message, text: remaining });
         remaining = "";
         continue;
@@ -5193,7 +5253,7 @@ function fullThreadChunks(items2, { userWords: userWords2 = (raw) => ({ text: St
         page = [];
         continue;
       }
-      let low = 1, high = remaining.length;
+      let low = 1, high = Math.min(remaining.length, maxChars);
       while (low < high) {
         const middle = Math.ceil((low + high) / 2);
         if (JSON.stringify([{ ...message, text: remaining.slice(0, middle) }]).length <= maxChars) low = middle;
@@ -5214,21 +5274,30 @@ const pageSchema = object$5({ data: array(itemSchema), nextCursor: string$1().nu
 const bound = (s) => s.slice(0, 1800);
 function userWords(raw) {
   const text2 = raw.trim();
-  if (/^<heartbeat>/.test(text2) || /^Automation: /.test(text2)) return { text: "", automated: true };
-  let words2 = text2.replace(/<in-app-browser-context[\s\S]*?<\/in-app-browser-context>/g, "");
+  if (text2.startsWith("<heartbeat>") || text2.startsWith("Automation: ")) return { text: "", automated: true };
+  let words2 = text2;
+  for (; ; ) {
+    const start = words2.indexOf("<in-app-browser-context");
+    if (start < 0) break;
+    const end = words2.indexOf("</in-app-browser-context>", start);
+    if (end < 0) break;
+    words2 = words2.slice(0, start) + words2.slice(end + 25);
+  }
   const request = words2.lastIndexOf("## My request:");
   if (request >= 0) words2 = words2.slice(request + 14);
-  const answers = [...words2.matchAll(/"answer":"((?:[^"\\]|\\.)*)"/g)].map((m2) => m2[1].replace(/\\"/g, '"'));
-  if (/<send_user_message_question_reply>/.test(words2)) words2 = answers.length ? `Answered: ${answers.join(" / ")}` : "";
+  if (words2.includes("<send_user_message_question_reply>")) {
+    const answers = [...boundedScanText(words2).text.matchAll(/"answer":"((?:[^"\\]|\\.)*)"/g)].map((m2) => m2[1].replace(/\\"/g, '"'));
+    words2 = answers.length ? `Answered: ${answers.join(" / ")}` : "";
+  }
   return { text: words2.trim(), automated: false };
 }
 function ownCompactionSummaries(items2) {
   const summaries = [];
   for (const item of items2) {
-    if (!/^(?:contextCompaction|context_compaction|compacted|compaction|contextSummary|context_summary)$/.test(item.type)) continue;
-    const parts = [item.summary, item.text, item.message].filter((value2) => typeof value2 === "string" && !!value2.trim());
+    if (!(/* @__PURE__ */ new Set(["contextCompaction", "context_compaction", "compacted", "compaction", "contextSummary", "context_summary"])).has(item.type)) continue;
+    const parts = [item.summary, item.text, item.message].filter((value2) => typeof value2 === "string" && !!value2.trim()).map((value2) => boundedScanText(value2).text);
     if (!parts.length && Array.isArray(item.content)) for (const part of item.content) {
-      if (part && typeof part === "object" && "text" in part && typeof part.text === "string" && part.text.trim()) parts.push(part.text);
+      if (part && typeof part === "object" && "text" in part && typeof part.text === "string" && part.text.trim()) parts.push(boundedScanText(part.text).text);
     }
     for (const part of parts) if (!summaries.includes(part)) summaries.push(part);
   }
@@ -5341,15 +5410,118 @@ async function readWorkspace(request, legacyAssignments = {}) {
   if (conversations.some((t) => t.ref.projectId === "unassigned")) projects.push({ id: "unassigned", name: "Other chats" });
   return { observedAt: (/* @__PURE__ */ new Date()).toISOString(), projects, conversations };
 }
+const THREAD_READ_BUDGET_MS = 1e4;
+const CHAT_READ_LIMIT_REASON = "This chat is too large to read in full";
+class ThreadReadLimitError extends Error {
+  code = "THREAD_READ_LIMIT";
+  constructor() {
+    super(CHAT_READ_LIMIT_REASON);
+  }
+}
+async function readThreadInWorker(ref2, command, options = {}) {
+  const { signal, budgetMs = THREAD_READ_BUDGET_MS, auditDirectory } = options;
+  if (signal?.aborted) throw new Error("Source read cancelled");
+  const extension = new URL(import.meta.url).pathname.endsWith(".ts") ? "ts" : new URL(import.meta.url).pathname.endsWith(".mjs") ? "mjs" : "js";
+  const entry = options.workerEntry ?? new URL(`./thread-read-worker.${extension}`, import.meta.url);
+  const worker2 = entry.pathname.endsWith(".ts") ? new Worker(`import(${JSON.stringify(pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm/api")).href)}).then(m=>m.tsImport(${JSON.stringify(entry.href)},${JSON.stringify(import.meta.url)}));`, { eval: true, workerData: { ref: ref2, command } }) : new Worker(entry, { workerData: { ref: ref2, command } });
+  let source, sourceExited;
+  let settled = false, sourceQueue = Promise.resolve();
+  const record2 = { owner: process.env.PRIORITREE_TASK_OWNER ?? "prioritree-thread-reader", parentPid: process.pid, workerThreadId: worker2.threadId, executable: command.exe, workingDirectory: process.cwd(), purpose: "One bounded read-only Codex chat read", stopCommand: "Close source stdin; terminate the exact spawned child only if EOF does not stop it", plannedAt: (/* @__PURE__ */ new Date()).toISOString(), pid: 0, createdAt: "", verifiedExited: false };
+  const audit = async () => {
+    if (auditDirectory) {
+      await mkdir(auditDirectory, { recursive: true });
+      await appendFile(join(auditDirectory, "source-read-processes.jsonl"), JSON.stringify(record2) + "\n");
+    }
+  };
+  let deadline;
+  const cancel = () => finish(new Error("Source read cancelled"));
+  let finish;
+  const result2 = new Promise((resolve2, reject) => {
+    finish = (error, value2) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      signal?.removeEventListener("abort", cancel);
+      error ? reject(error) : resolve2(value2);
+    };
+    deadline = setTimeout(() => finish(new ThreadReadLimitError()), budgetMs);
+    signal?.addEventListener("abort", cancel, { once: true });
+    worker2.on("message", (message) => {
+      if (message.type === "result") {
+        finish(void 0, message.result);
+        return;
+      }
+      if (message.type === "failure") {
+        finish(new Error(message.reason));
+        return;
+      }
+      sourceQueue = sourceQueue.then(async () => {
+        if (settled) return;
+        if (message.type === "source-start") {
+          if (source) throw new Error("A chat read attempted a second source process");
+          await audit();
+          if (settled) return;
+          source = spawn(command.exe, command.args, { stdio: ["pipe", "pipe", "pipe"], windowsHide: true, detached: process.platform === "win32" });
+          record2.pid = source.pid ?? 0;
+          record2.createdAt = (/* @__PURE__ */ new Date()).toISOString();
+          sourceExited = new Promise((resolve22) => source.once("close", () => {
+            record2.verifiedExited = true;
+            resolve22();
+          }));
+          source.once("exit", (code2, signal2) => worker2.postMessage({ type: "source-exit", code: code2, signal: signal2 }));
+          source.stdout.on("data", (bytes) => worker2.postMessage({ type: "source-data", bytes }));
+          source.stderr.resume();
+          source.stdin.on("error", () => {
+          });
+          source.once("error", (error) => {
+            worker2.postMessage({ type: "source-error", reason: error.message });
+            finish(error);
+          });
+          await audit();
+        } else if (message.type === "source-write") source?.stdin.write(message.bytes);
+        else if (message.type === "source-end") source?.stdin.end();
+        else if (message.type === "source-kill" && source?.exitCode === null && source.signalCode === null) source.kill();
+      }).catch((error) => finish(error));
+    });
+    worker2.once("error", (error) => finish(error));
+    worker2.once("exit", (code2) => {
+      if (!settled) finish(new Error(`Chat reader exited before returning a result (${code2})`));
+    });
+  });
+  try {
+    return await result2;
+  } finally {
+    settled = true;
+    clearTimeout(deadline);
+    signal?.removeEventListener("abort", cancel);
+    worker2.postMessage({ type: "cancel" });
+    await sourceQueue;
+    if (source && source.exitCode === null && source.signalCode === null) {
+      source.stdin.end();
+      const timer = setTimeout(() => {
+        if (source.exitCode === null && source.signalCode === null) source.kill();
+      }, 1e3), force = setTimeout(() => {
+        if (source.exitCode === null && source.signalCode === null) source.kill("SIGKILL");
+      }, 2e3);
+      try {
+        await sourceExited;
+      } finally {
+        clearTimeout(timer);
+        clearTimeout(force);
+      }
+    }
+    await worker2.terminate();
+    await audit();
+  }
+}
 async function readLocalCodex(ref2, signal) {
   return withClient(signal, (client) => new CodexReader((method, params) => client.request(method, params)).read(ref2));
 }
 async function readLocalCodexForSetup(ref2, signal) {
-  return withClient(signal, async (client) => {
-    const result2 = await new CodexReader((method, params) => client.request(method, params)).readForSetup(ref2);
-    if (signal?.aborted) throw new Error("Source read cancelled");
-    return result2;
-  });
+  if (signal?.aborted) throw new Error("Source read cancelled");
+  const exe = await resolveCodexCli();
+  if (!exe) throw new Error("Set PRIORITREE_CODEX_CLI to the absolute installed Codex executable, or install the Codex app");
+  return readThreadInWorker(ref2, codexSourceCommand(exe), { signal, auditDirectory: process.env.PRIORITREE_WORK_STORE_DIR });
 }
 async function readLocalAttention(refs, sinceMs, signal) {
   return withClient(signal, async (client) => {
@@ -24664,10 +24836,11 @@ const safeIssueKeys = new Set("card route sourceSessionId sourceUpdatedAt projec
 function summaryErrorDetails(error) {
   const issues = error instanceof ZodError$1 ? error.issues.map((issue2) => ({ path: issue2.path.map((part) => typeof part === "number" ? part : safeIssueKeys.has(String(part)) ? String(part) : "*"), code: issue2.code, ...safeIssueMessages.has(issue2.message) ? { message: issue2.message } : {} })) : error instanceof SummaryVerificationError ? [{ path: error.path, code: error.code }] : [];
   const rawCode = error?.code;
-  const code2 = error instanceof ZodError$1 ? "SUMMARY_SCHEMA_INVALID" : error instanceof SummaryVerificationError ? error.code : error instanceof Error && /^Work snapshot busy\b/.test(error.message) ? "EBUSY" : typeof rawCode === "string" && (/* @__PURE__ */ new Set(["THREAD_SUMMARY_UNAVAILABLE", "ENOENT", "EACCES", "EPERM", "EBUSY", "ENOSPC", "EIO", "EEXIST", "ETIMEDOUT", "EMFILE", "ENFILE"])).has(rawCode) ? rawCode : "SUMMARY_OPERATION_FAILED";
+  const code2 = error instanceof ZodError$1 ? "SUMMARY_SCHEMA_INVALID" : error instanceof SummaryVerificationError ? error.code : error instanceof Error && /^Work snapshot busy\b/.test(error.message) ? "EBUSY" : typeof rawCode === "string" && (/* @__PURE__ */ new Set(["THREAD_READ_LIMIT", "THREAD_SUMMARY_UNAVAILABLE", "ENOENT", "EACCES", "EPERM", "EBUSY", "ENOSPC", "EIO", "EEXIST", "ETIMEDOUT", "EMFILE", "ENFILE"])).has(rawCode) ? rawCode : "SUMMARY_OPERATION_FAILED";
   return { code: code2, issueCount: issues.length, issues: issues.slice(0, 1e3) };
 }
 function summaryFailureReason(stage, error, details) {
+  if (details.code === "THREAD_READ_LIMIT") return { stage, reason: "This chat is too large to read in full" };
   const model = error;
   const modelStages = /* @__PURE__ */ new Set(["extraction validation", "merge validation", "extraction model", "merge model", "local merge validation"]), modelReasons = /* @__PURE__ */ new Set(["source quote could not be verified after one permitted repair", "required card fields are missing", "supporting work or evidence exceeds the limit", "card shape could not be verified", "model timeout after 480 s", "model exited before returning a card", "model used a tool", "model output exceeded the limit", "model returned invalid JSON", "validated parts could not form a verified card", "model run failed"]);
   if (model?.code === "THREAD_SUMMARY_FAILED" && model.stage && modelStages.has(model.stage) && model.reason && modelReasons.has(model.reason)) return { stage: model.stage, reason: `${model.stage}: ${model.reason}` };
@@ -27441,19 +27614,20 @@ $ErrorActionPreference='Stop'
 try {
  $request=[Console]::In.ReadToEnd()|ConvertFrom-Json
  $owned=@($request.owned)
- $taskKill=Join-Path $env:SystemRoot 'System32\taskkill.exe'
- function Stop-DeskIdentity($identity,$force){
+ function Stop-DeskIdentity($identity){
   $current=Get-PTProcess -Filter ('ProcessId='+[int]$identity.pid)
   if(!$current -or $current.CreationDate.ToUniversalTime().ToString('o') -cne $identity.createdAt -or ($identity.executable -and $current.ExecutablePath -ine $identity.executable)){return}
-  $ErrorActionPreference='Continue';if($force){& $taskKill /PID $current.ProcessId /F 2>$null|Out-Null}else{& $taskKill /PID $current.ProcessId 2>$null|Out-Null}
+  # Get-Process opens the exact process handle; recheck its birth before stopping.
+  # Do not synthesize console Ctrl+C or use taskkill's ancestry-based /T switch.
+  $target=Get-Process -Id $current.ProcessId -ErrorAction SilentlyContinue
+  if($target -and [Math]::Abs($target.StartTime.ToUniversalTime().Ticks-$current.CreationDate.ToUniversalTime().Ticks) -lt 10000){Stop-Process -InputObject $target -Force -ErrorAction Stop}
  }
  # Leaves first, one verified identity at a time. Numeric ancestry alone never authorizes a tree stop.
- foreach($identity in $owned){Stop-DeskIdentity $identity $false}
+ foreach($identity in $owned){Stop-DeskIdentity $identity}
  for($attempt=0;$attempt -lt 40;$attempt++){
   $all=@(Get-PTProcess)
   $remaining=@($owned|Where-Object {$identity=$_;@($all|Where-Object {$_.ProcessId -eq $identity.pid -and $_.CreationDate.ToUniversalTime().ToString('o') -ceq $identity.createdAt -and (!$identity.executable -or $_.ExecutablePath -ieq $identity.executable)}).Count -gt 0})
   if(!$remaining.Count){@{stopped=$true}|ConvertTo-Json -Compress;exit 0}
-  if($attempt -eq 19){foreach($identity in $remaining){Stop-DeskIdentity $identity $true}}
   Start-Sleep -Milliseconds 125
  }
  @{error='The exact owned desk process tree did not confirm exit.'}|ConvertTo-Json -Compress;exit 1
@@ -27669,7 +27843,11 @@ async function stageWindowsDeskEngine(options) {
   if (!await (options.verify ?? verifyNodeRuntime)(options.runtime)) throw new Error("No verified Node runtime is available; the host executable was not staged.");
   if (!options.entryPath.endsWith(".mjs")) return { runtime: options.runtime, entryPath: options.entryPath, workingDirectory: process.cwd() };
   const assets = join(dirname(options.entryPath), "desk");
-  const sources = [{ source: options.runtime, name: "node.exe" }, { source: options.entryPath, name: "desk-engine.mjs" }, { source: join(dirname(options.entryPath), "work-map.mjs"), name: "work-map.mjs" }, ...(await deskFiles(assets)).map((source) => ({ source, name: join("desk", relative(assets, source)) }))];
+  const worker2 = join(dirname(options.entryPath), "thread-read-worker.mjs");
+  const sources = [{ source: options.runtime, name: "node.exe" }, { source: options.entryPath, name: "desk-engine.mjs" }, { source: join(dirname(options.entryPath), "work-map.mjs"), name: "work-map.mjs" }, ...await stat(worker2).then(() => true, (error) => {
+    if (error.code === "ENOENT") return false;
+    throw error;
+  }) ? [{ source: worker2, name: "thread-read-worker.mjs" }] : [], ...(await deskFiles(assets)).map((source) => ({ source, name: join("desk", relative(assets, source)) }))];
   const hashes = await Promise.all(sources.map(async (file) => ({ ...file, sha256: await digest(file.source) })));
   const key2 = createHash("sha256").update(JSON.stringify(hashes.map(({ name, sha256 }) => ({ name, sha256 })))).digest("hex");
   const cache = resolve$1(options.directory, "engine-runtime"), destination = join(cache, key2);
@@ -27794,7 +27972,7 @@ async function stopOwnedChild(child, detached) {
   if (childExited(child)) return;
   const stop2 = async (force) => {
     if (childExited(child) || !child.pid) return;
-    if (process.platform === "win32") await new Promise((resolve2) => execFile("taskkill.exe", ["/PID", String(child.pid), "/T", ...force ? ["/F"] : []], { windowsHide: true, timeout: 1e4 }, () => resolve2()));
+    if (process.platform === "win32") child.kill(force ? "SIGKILL" : "SIGTERM");
     else try {
       process.kill(detached ? -child.pid : child.pid, force ? "SIGKILL" : "SIGTERM");
     } catch (error) {
@@ -28990,7 +29168,7 @@ class BuildDriver {
     }
   }
 }
-const DESK_VERSION = "1.13.4";
+const DESK_VERSION = "1.13.5";
 const DESK_BODY_LIMIT = 1e4;
 const tools = /* @__PURE__ */ new Set(["get_work_view", "set_signal_preferences", "answer_work_request", "list_work_requests", "wait_for_change", "get_history", "refresh_work", "set_work_override", "read_work_item", "set_project_plan", "update_initiative", "set_step_verdict", "confirm_initiatives", "set_goal", "order_goals", "add_initiative", "order_initiatives"]);
 class DeskWorkStore extends WorkStore {
@@ -29587,10 +29765,10 @@ function createCodexAiRunner(options = {}) {
     const node = options.node ?? process.execPath, packaged = import.meta.url.endsWith(".mjs"), mcpEntry = options.mcpEntry ?? fileURLToPath(new URL(packaged ? "./work-map.mjs" : "./mini-app-entry.js", import.meta.url)), cwd = options.cwd ?? (packaged ? dirname(mcpEntry) : dirname(dirname(dirname(mcpEntry))));
     const args = codexAiArguments(request, node, mcpEntry);
     const jsCli = /\.[cm]?js$/i.test(executable), command = jsCli ? node : executable, commandArgs = jsCli ? [executable, ...args] : args;
-    const record2 = { owner: `desk-ai:${request.runId}`, pid: null, createdAt: (/* @__PURE__ */ new Date()).toISOString(), executable: command, workingDirectory: cwd, purpose: "User-requested PrioriTree map update", stopCommand: "Desk Update with AI Cancel: SIGTERM owned process group or Windows taskkill /PID <owned pid> /T; bounded force fallback; verify close", status: "planned" };
+    const record2 = { owner: `desk-ai:${request.runId}`, pid: null, createdAt: (/* @__PURE__ */ new Date()).toISOString(), executable: command, workingDirectory: cwd, purpose: "User-requested PrioriTree map update", stopCommand: "Desk Update with AI Cancel: stdin EOF, exact captured Windows process handles or owned POSIX process group; verify close", status: "planned" };
     await writeFile(request.metadataPath, JSON.stringify(record2, null, 2));
     if (request.signal.aborted) throw new Error("AI update cancelled");
-    const child = spawn(command, commandArgs, { cwd, env: { ...process.env, PRIORITREE_WORK_STORE_DIR: request.storeDirectory, PRIORITREE_AI_RUN_ID: request.runId, PRIORITREE_AI_SESSION_IDS: JSON.stringify(request.sessionIds) }, stdio: ["pipe", "pipe", "pipe"], windowsHide: true, detached: process.platform !== "win32" });
+    const child = spawn(command, commandArgs, { cwd, env: { ...process.env, PRIORITREE_WORK_STORE_DIR: request.storeDirectory, PRIORITREE_AI_RUN_ID: request.runId, PRIORITREE_AI_SESSION_IDS: JSON.stringify(request.sessionIds) }, stdio: ["pipe", "pipe", "pipe"], windowsHide: true, detached: true });
     let exited = false, endedAt = Infinity;
     const rawCompletion = new Promise((resolve2, reject) => {
       child.once("error", (error) => {
@@ -29622,7 +29800,7 @@ function createCodexAiRunner(options = {}) {
       } else if (exited && !groupAlive(child.pid)) return;
       child.stdin.end();
       if (process.platform === "win32") {
-        if (child.pid && windowsOwned.some((p2) => p2.pid === child.pid)) await new Promise((resolve2) => execFile("taskkill", ["/PID", String(child.pid), "/T"], { windowsHide: true, timeout: 1e4 }, () => resolve2()));
+        await stopWindowsIdentities(windowsOwned);
       } else try {
         if (child.pid) process.kill(-child.pid, "SIGTERM");
       } catch (error) {
@@ -29632,7 +29810,7 @@ function createCodexAiRunner(options = {}) {
       if (child.pid && (!first && !exited || process.platform !== "win32" && groupAlive(child.pid))) {
         if (process.platform === "win32") {
           if (!matchingWindowsProcesses(await windowsProcesses(), windowsOwned).some((p2) => p2.pid === child.pid)) throw new Error("AI process identity could not be verified before stopping");
-          await new Promise((resolve2, reject) => execFile("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, timeout: 1e4 }, (error) => error && !exited ? reject(error) : resolve2()));
+          await stopWindowsIdentities(windowsOwned);
         } else try {
           process.kill(-child.pid, "SIGKILL");
         } catch (error) {
@@ -29644,7 +29822,7 @@ function createCodexAiRunner(options = {}) {
         let remaining = matchingWindowsProcesses(await windowsProcesses(), windowsOwned);
         for (const identity2 of remaining) {
           const same2 = matchingWindowsProcesses(await windowsProcesses(), [identity2]);
-          if (same2.length) await new Promise((resolve2) => execFile("taskkill", ["/PID", String(identity2.pid), "/T", "/F"], { windowsHide: true, timeout: 1e4 }, () => resolve2()));
+          await stopWindowsIdentities(same2);
         }
         remaining = matchingWindowsProcesses(await windowsProcesses(), windowsOwned);
         if (remaining.length) throw new Error("AI process tree exit could not be verified");
@@ -29732,6 +29910,12 @@ function ownedWindowsTree(processes, pid, startedAt, endedAt = Infinity) {
 }
 function matchingWindowsProcesses(current, owned) {
   return owned.filter((identity2) => current.some((p2) => p2.pid === identity2.pid && p2.createdAt === identity2.createdAt));
+}
+async function stopWindowsIdentities(owned) {
+  if (!owned.length) return;
+  if (owned.some((identity2) => !identity2.executable)) throw new Error("AI process executable identity is unknown");
+  const result2 = await runWindowsDeskScript(WINDOWS_DESK_STOP, { owned: [...owned].reverse() }, 2e4);
+  if (result2.stopped !== true) throw new Error("AI process identities did not confirm exit");
 }
 const worker = String.raw`
 const fs=require('node:fs'),cp=require('node:child_process'),path=require('node:path');

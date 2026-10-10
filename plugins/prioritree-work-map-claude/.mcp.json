@@ -1,8 +1,9 @@
 {
   "mcpServers": {
     "prioritree_work_map": {
-      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/launch-work-map.cmd",
+      "command": "node",
       "args": [
+        "${CLAUDE_PLUGIN_ROOT}/scripts/launch-work-map.mjs",
         "claude"
       ]
     }

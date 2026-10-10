@@ -1,20 +1,20 @@
 {
   "mcpServers": {
     "prioritree_work_map": {
-      "command": "cmd.exe",
-      "args": [
-        "/d",
-        "/c",
-        "scripts\\launch-work-map.cmd",
-        "codex"
-      ],
+      "command": "./scripts/launch-work-map",
+      "args": [],
       "cwd": ".",
       "env_vars": [
         "PATH",
+        "PATHEXT",
+        "SystemRoot",
         "USERPROFILE",
         "LOCALAPPDATA",
         "APPDATA",
         "HOME",
+        "XDG_DATA_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_CACHE_HOME",
         "CODEX_HOME",
         "CODEX_CLI_PATH",
         "CODEX_MCP_NODE_PATH",

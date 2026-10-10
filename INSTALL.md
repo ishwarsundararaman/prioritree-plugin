@@ -31,8 +31,8 @@ Then start a new chat and say **work map**. The plugin uses the Node runtime tha
 /plugin install prioritree-work-map@prioritree
 ```
 
-Start a fresh session if the tools don't appear. Claude Code needs Node.js 22.12 or newer on your
-PATH. If Codex is installed, its bundled Node is used as a fallback.
+Start a fresh session if the tools don't appear. Claude Code needs Node.js 20.19 or newer on your
+PATH.
 
 ## First run
 
@@ -81,9 +81,8 @@ interrupted, it picks up where it left off.
 ## Good to know
 
 - **Sources:** only Codex chats are read today. Claude's own chats aren't read yet.
-- **Platforms:** automated checks run the installed plugin on Windows, Mac and Linux.
-  - Claude Desktop works on Windows and Mac.
-  - Codex and Claude Code work on Windows. On Mac and Linux they need the next update.
+- **Platforms:** automated checks run the installed plugin on Windows, Mac and Linux for every
+  release, in Claude Desktop, Codex and Claude Code.
 - **No cloud:** there is no PrioriTree cloud sync in this version. Your map stays on your computer.
   Your AI provider processes the chat text it summarises, under its own terms.
 
