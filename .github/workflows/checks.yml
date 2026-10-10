@@ -1,0 +1,81 @@
+name: Installed plugin platform checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  installed-plugin:
+    name: ${{ matrix.platform.name }} / Node ${{ matrix.node }}
+    runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          # Standard public runners, checked against GitHub's runner reference.
+          - {name: 'Mac (Apple silicon)', runner: macos-latest}
+          - {name: 'Mac (Intel)', runner: macos-15-intel}
+          - {name: Linux, runner: ubuntu-latest}
+          - {name: Windows, runner: windows-latest}
+        node: ['20', '22']
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out the public release files
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Select Node ${{ matrix.node }}
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Prepare temporary diagnostics paths
+        run: node -e 'require("fs").appendFileSync(process.env.GITHUB_ENV, "CHECK_ROOT=" + require("path").join(process.env.RUNNER_TEMP, "prioritree-platform-checks") + "\n")'
+      - name: Verify the check helpers
+        run: node --test .github/scripts/check-support.test.mjs
+      - name: Check manifests, real host commands, default store and engine Stop
+        if: ${{ !cancelled() }}
+        run: node .github/scripts/check-plugin.mjs --artifacts "$CHECK_ROOT/diagnostics/repository-node"
+      - name: Install a temporary real Electron host
+        id: electron
+        if: ${{ !cancelled() && matrix.node == '22' }}
+        run: node .github/scripts/check-support.mjs install-electron "$CHECK_ROOT/electron"
+      - name: Check Claude Desktop's Electron launch and runtime-copy regression
+        if: ${{ !cancelled() && matrix.node == '22' && steps.electron.outcome == 'success' }}
+        run: |
+          ELECTRON_PATH=$(node -p 'JSON.parse(require("fs").readFileSync(process.env.CHECK_ROOT + "/electron/electron-install.json", "utf8")).executable')
+          node .github/scripts/check-plugin.mjs --phase electron --electron "$ELECTRON_PATH" --artifacts "$CHECK_ROOT/diagnostics/repository-electron"
+      - name: Download and verify the latest public MCPB release
+        id: release
+        if: ${{ !cancelled() && (github.event_name == 'release' || github.event_name == 'workflow_dispatch') }}
+        run: |
+          VERSION=$(node -p 'require("./manifest.json").version')
+          node .github/scripts/check-support.mjs download-release "$CHECK_ROOT/released-mcpb" "$VERSION"
+      - name: Check the released MCPB's real server under Node
+        if: ${{ !cancelled() && steps.release.outcome == 'success' }}
+        run: node .github/scripts/check-plugin.mjs --layout mcpb --root "$CHECK_ROOT/released-mcpb" --artifacts "$CHECK_ROOT/diagnostics/release-node"
+      - name: Check the released MCPB under Claude Desktop's Electron host
+        if: ${{ !cancelled() && matrix.node == '22' && steps.electron.outcome == 'success' && steps.release.outcome == 'success' }}
+        run: |
+          ELECTRON_PATH=$(node -p 'JSON.parse(require("fs").readFileSync(process.env.CHECK_ROOT + "/electron/electron-install.json", "utf8")).executable')
+          node .github/scripts/check-plugin.mjs --layout mcpb --root "$CHECK_ROOT/released-mcpb" --phase electron --electron "$ELECTRON_PATH" --artifacts "$CHECK_ROOT/diagnostics/release-electron"
+      - name: Keep failure diagnostics and ownership evidence
+        if: ${{ failure() || cancelled() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: platform-diagnostics-${{ matrix.platform.runner }}-node-${{ matrix.node }}
+          path: |
+            ${{ env.CHECK_ROOT }}/diagnostics/
+            ${{ env.CHECK_ROOT }}/electron/install-process*.json*
+            ${{ env.CHECK_ROOT }}/electron/electron-install.json
+            ${{ env.CHECK_ROOT }}/released-mcpb/release-receipt.json
+          if-no-files-found: warn
+          retention-days: 3
