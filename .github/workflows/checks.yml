@@ -40,7 +40,7 @@ jobs:
       - name: Prepare temporary diagnostics paths
         run: node -e 'require("fs").appendFileSync(process.env.GITHUB_ENV, "CHECK_ROOT=" + require("path").join(process.env.RUNNER_TEMP, "prioritree-platform-checks") + "\n")'
       - name: Verify the check helpers
-        run: node --test .github/scripts/check-support.test.mjs
+        run: node --test .github/scripts/check-support.test.mjs .github/scripts/host-launch.test.mjs
       - name: Check manifests, real host commands, default store and engine Stop
         if: ${{ !cancelled() }}
         run: node .github/scripts/check-plugin.mjs --artifacts "$CHECK_ROOT/diagnostics/repository-node"

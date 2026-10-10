@@ -11,6 +11,7 @@ import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { parseArgs, promisify } from 'node:util';
 import { contained } from './check-support.mjs';
+import { resolveHostLaunch } from './host-launch.mjs';
 import { delay, descendants, executablePath, processSnapshot, sameProcess, stopCapturedProcesses } from './processes.mjs';
 
 const execute = promisify(execFile), scriptDirectory = dirname(fileURLToPath(import.meta.url));
@@ -118,13 +119,23 @@ async function validateManifests() {
       const config = await readJson(join(pluginRoot, entry)); manifests.push(join(directory, entry));
       assert(config.mcpServers?.prioritree_work_map, `${entry} has no work-map server`);
       const server = config.mcpServers.prioritree_work_map;
-      for (const value of [server.command, ...server.args]) if (/launch-work-map\.(?:cmd|sh|mjs)$/.test(value)) await access(contained(pluginRoot, resolve(pluginRoot, expand(value, pluginRoot).replaceAll('\\', '/'))));
+      for (const value of [server.command, ...server.args]) if (/launch-work-map(?:\.(?:cmd|sh|mjs))?$/.test(value)) await access(contained(pluginRoot, resolve(pluginRoot, expand(value, pluginRoot).replaceAll('\\', '/'))));
+      if (directory === 'plugins/prioritree-work-map' && /[/\\]launch-work-map$/.test(server.command)) {
+        await access(join(pluginRoot, 'scripts/launch-work-map.cmd'));
+        const siblings = (await readdir(join(pluginRoot, 'scripts'))).filter((name) => name.startsWith('launch-work-map'));
+        assert.deepEqual(siblings.sort(), ['launch-work-map', 'launch-work-map.cmd'], 'Codex must have no other PATHEXT sibling, including .mjs');
+      }
       if (server.cwd) await access(contained(root, resolve(pluginRoot, server.cwd)));
     }
-    const launcher = join(directory, 'scripts/launch-work-map.sh');
-    const { stdout } = await execute('git', ['ls-files', '--stage', '--', launcher.replaceAll('\\', '/')], { cwd: root, timeout: 10000 });
-    assert.match(stdout, /^100755 /, `${launcher} must be executable in git, not merely chmod-ed in this checkout`);
-    if (process.platform !== 'win32') assert((await stat(join(root, launcher))).mode & 0o111, `${launcher} is not executable in this checkout`);
+    for (const name of ['launch-work-map', 'launch-work-map.sh']) {
+      const launcher = join(directory, 'scripts', name);
+      try { await access(join(root, launcher)); } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+      const { stdout } = await execute('git', ['ls-files', '--stage', '--', launcher.replaceAll('\\', '/')], { cwd: root, timeout: 10000 });
+      assert.match(stdout, /^100755 /, `${launcher} must be executable in git, not merely chmod-ed in this checkout`);
+      const source = await readFile(join(root, launcher), 'utf8');
+      assert(source.startsWith('#!/bin/sh\n') && !source.includes('\r'), `${launcher} needs a usable LF shebang`);
+      if (process.platform !== 'win32') assert((await stat(join(root, launcher))).mode & 0o111, `${launcher} is not executable in this checkout`);
+    }
   }
   // Lock the test expectation to the installation contract, not to the implementation under test.
   const installation = await readFile(resolve(scriptDirectory, '../../INSTALL.md'), 'utf8');
@@ -204,13 +215,13 @@ async function isolatedProfile(scratch, runDirectory, port, xdgFallback) {
 }
 
 function hostPlans() {
-  const desktop = { label: 'Claude Desktop MCPB', command: manifest.server.mcp_config.command, args: manifest.server.mcp_config.args.map((value) => expand(value, root)), cwd: root };
+  const desktop = { host: 'mcpb', label: 'Claude Desktop MCPB', command: manifest.server.mcp_config.command, args: manifest.server.mcp_config.args.map((value) => expand(value, root)), cwd: root };
   if (values.phase === 'electron') return [{ ...desktop, label: 'Claude Desktop Electron', command: resolve(values.electron || ''), electron: true }];
   const plans = [];
   if (values.layout === 'repository') for (const [label, directory, metadata] of [
     ['Codex plugin', 'plugins/prioritree-work-map', '.codex-plugin/plugin.json'],
     ['Claude Code plugin', 'plugins/prioritree-work-map-claude', '.claude-plugin/plugin.json'],
-  ]) plans.push({ label, pluginRoot: join(root, directory), metadata });
+  ]) plans.push({ host: label.startsWith('Codex') ? 'codex' : 'claude-code', label, pluginRoot: join(root, directory), metadata });
   plans.push(desktop);
   return plans;
 }
@@ -222,15 +233,6 @@ async function resolvePlan(plan) {
   // exists here. Do not silently replace .mcp.json with .mcp.posix.json to get green CI.
   const config = (await readJson(join(plan.pluginRoot, metadata.mcpServers))).mcpServers.prioritree_work_map;
   return { ...plan, configFile: metadata.mcpServers, command: expand(config.command, plan.pluginRoot), args: config.args.map((value) => expand(value, plan.pluginRoot)), cwd: resolve(plan.pluginRoot, config.cwd || '.') };
-}
-
-function launchPlan(plan, env) {
-  if (process.platform === 'win32' && /\.cmd$/i.test(plan.command)) {
-    // Windows hosts run a .cmd through cmd.exe. Preserve the declared script and args.
-    assert(![plan.command, ...plan.args].some((value) => /["\r\n%&|<>^]/.test(value)), 'Unsafe Windows launch argument');
-    return { command: join(process.env.SystemRoot, 'System32/cmd.exe'), args: ['/d', '/s', '/c', `""${plan.command}" ${plan.args.map((value) => `"${value}"`).join(' ')}"`], windowsVerbatimArguments: true };
-  }
-  return { command: plan.command, args: plan.args };
 }
 
 function rpcClient(child, run) {
@@ -283,10 +285,10 @@ async function runProduct(originalPlan, index, xdgFallback = false) {
       assert.match(electronRuntime.electron || '', /^\d+\.\d+\.\d+$/, 'The supplied executable is not a real Electron host');
       await saveJson(join(runDirectory, 'electron-runtime-probe.json'), { ...electronRuntime, verifiedExited: true });
     }
-    command = launchPlan(plan, profile.env);
+    command = await resolveHostLaunch(plan, profile.env);
   } catch (error) { contained(tmpdir(), scratch); await rm(scratch, { recursive: true, force: true }); throw error; }
   const { env, store, project, sessionId } = profile;
-  const run = { label, owner: 'public-ci/platform-checks', pid: null, createdAt: new Date().toISOString(), executable: command.command, workingDirectory: plan.cwd, purpose: 'Verify installed MCP server, default store, engine readiness and Stop lifecycle', stopCommand: `POST ${url}/api/desk/stop with same-origin Origin; close host stdin; verify exact owned identities and port exit`, args: command.args, configFile: plan.configFile, scratch, store, port, stderr: '', identities: [], engines: [], electronRuntime };
+  const run = { label, host: plan.host, declaredCommand: plan.command, resolvedProgram: command.resolvedProgram, owner: 'public-ci/platform-checks', pid: null, createdAt: new Date().toISOString(), executable: command.command, workingDirectory: plan.cwd, purpose: 'Verify installed MCP server, default store, engine readiness and Stop lifecycle', stopCommand: `POST ${url}/api/desk/stop with same-origin Origin; close host stdin; verify exact owned identities and port exit`, args: command.args, configFile: plan.configFile, scratch, store, port, stderr: '', identities: [], engines: [], electronRuntime };
   summary.runs.push(run);
   const ledger = join(runDirectory, 'owner.json');
   await saveJson(ledger, run); // Record the intent before starting any persistent helper.
@@ -517,7 +519,7 @@ try {
       let config;
       try { config = (await readJson(join(pluginRoot, filename))).mcpServers.prioritree_work_map; }
       catch (error) { if (error.code === 'ENOENT') continue; throw error; } // New releases need only the referenced .mcp.json.
-      const plan = { label, command: expand(config.command, pluginRoot), args: config.args.map((value) => expand(value, pluginRoot)), cwd: pluginRoot, configFile: filename };
+      const plan = { host: label.startsWith('Codex') ? 'codex' : 'claude-code', label, command: expand(config.command, pluginRoot), args: config.args.map((value) => expand(value, pluginRoot)), cwd: pluginRoot, configFile: filename };
       await check(`${label}: lifecycle run`, () => runCheck(plan));
     }
     if (process.platform === 'linux' && values.phase === 'node') await check('Linux XDG fallback: lifecycle run', () => runCheck(hostPlans().find((plan) => !plan.pluginRoot), true));

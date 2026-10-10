@@ -17,21 +17,41 @@ so changing the controller's Node version would not test a different Electron ru
 
 | Host | Declared command | Runtime selection |
 | --- | --- | --- |
-| Codex | `.codex-plugin/plugin.json` references `.mcp.json`: `cmd.exe /d /c scripts\launch-work-map.cmd codex`, cwd plugin root | `CODEX_MCP_NODE_PATH` first, then PATH and bundled-runtime fallback |
-| Claude Code | `.claude-plugin/plugin.json` references `.mcp.json`: `${CLAUDE_PLUGIN_ROOT}/scripts/launch-work-map.cmd claude` | PATH first, then `CODEX_MCP_NODE_PATH` and bundled-runtime fallback |
+| Codex | Portable declaration: `./scripts/launch-work-map`, cwd plugin root | Windows uses cwd/PATH/PATHEXT to resolve `.cmd`; Unix directly executes the shebang. Scripts prefer `CODEX_MCP_NODE_PATH`, then PATH and known runtime caches. No PATH Node requirement. |
+| Claude Code | Portable declaration: `node` plus `${CLAUDE_PLUGIN_ROOT}/scripts/launch-work-map.mjs` | Plain spawn of PATH Node, requiring Node 20.19+. No Codex resolver or automatic batch wrapper. |
 | Claude Desktop MCPB | `manifest.json` server `mcp_config.command` and `args`; Node or a real Electron binary with `ELECTRON_RUN_AS_NODE=1` | The host's supplied executable |
 
-In 1.13.3 the `.cmd` launchers dispatch to `.sh` when a shell explicitly reads them,
+The checked-in 1.13.3 release predates the portable declarations. Its Codex default
+declares `cmd.exe` and Claude Code's default declares a `.cmd` path. In 1.13.3 the
+`.cmd` launchers dispatch to `.sh` when a shell explicitly reads them,
 but have no shebang for a direct POSIX spawn. The POSIX configurations declare `sh
 scripts/launch-work-map.sh codex/claude`; Claude's Windows variant explicitly declares
 `cmd.exe /d /c`. The checks load the manifest's actual referenced configuration and also
 test the platform variants. They never silently substitute an unreferenced POSIX file.
 The 1.13.3 package builder has no OS-selection rule for these alternate files. In 1.13.3 the
 Codex default still says `cmd.exe` on macOS/Linux, which is expected to fail there.
-Claude Code's default `.cmd` also fails direct POSIX execution with ENOEXEC. These are
+Claude Code's default `.cmd` also fails direct POSIX execution with ENOEXEC and
+plain Windows spawn with EINVAL. The old Windows check inferred a batch wrapper;
+the faithful host model now exposes that declaration until the new release lands. These are
 product failures, independent of the runtime-identification checks.
 Releases that declare one portable configuration need no alternate files. The checks
 always exercise the referenced configuration and exercise unselected variants when shipped.
+
+Host resolution lives in `host-launch.mjs`, with source links in its comments:
+Codex [Windows lookup](https://github.com/openai/codex/blob/322bbf4d8486efd7dbbcf49598711a9e3fefc282/codex-rs/rmcp-client/src/program_resolver.rs#L41-L65)
+and [Unix direct exec](https://github.com/openai/codex/blob/322bbf4d8486efd7dbbcf49598711a9e3fefc282/codex-rs/rmcp-client/src/program_resolver.rs#L23-L29),
+and [Claude Code's executable/argv contract](https://code.claude.com/docs/en/plugins-reference#mcp-servers).
+The Windows model follows which 8's exact-file/PATHEXT order and rejects an
+extensionless sh file using the executable check, rather than Windows X_OK.
+MCPB launches use the selected host runtime, independent of PATH. Ownership
+receipts preserve both the declared command and resolved program.
+
+`host-launch.test.mjs` uses temporary stub servers, an empty PATH directory and
+PATHEXT with `.MJS` before `.CMD`. The Windows run verifies `.cmd` lookup, runtime
+hint use, spaced paths and EOF exit; Unix runs the declared sh script directly.
+Git sh simulates shebang execution for that test on Windows. Metadata also requires
+Codex's portable script to have git mode `100755`, an LF shebang and only a `.cmd`
+sibling; Claude Code ships its JavaScript launcher separately.
 
 Runtime identity uses `/proc/<pid>/exe` on Linux. On macOS it resolves lsof's executable
 `txt` descriptor, with `ps` comm plus the child's PATH as a fallback. A bare `node` is
