@@ -74,7 +74,8 @@ jobs:
           name: platform-diagnostics-${{ matrix.platform.runner }}-node-${{ matrix.node }}
           path: |
             ${{ env.CHECK_ROOT }}/diagnostics/
-            ${{ env.CHECK_ROOT }}/electron/install-process.json*
+            ${{ env.CHECK_ROOT }}/electron/install-process*.json*
+            ${{ env.CHECK_ROOT }}/electron/electron-install.json
             ${{ env.CHECK_ROOT }}/released-mcpb/release-receipt.json
           if-no-files-found: warn
           retention-days: 3

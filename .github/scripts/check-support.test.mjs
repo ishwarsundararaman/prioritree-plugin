@@ -1,11 +1,11 @@
 // Test the harness's safety boundaries, not a reimplementation of the product.
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { contained, extractZip } from './check-support.mjs';
-import { descendants, sameProcess } from './processes.mjs';
+import { contained, ELECTRON_VERSION, extractZip, prepareElectronRuntime } from './check-support.mjs';
+import { descendants, executableOnPath, executableTextPaths, sameProcess } from './processes.mjs';
 
 function crc32(bytes) {
   let crc = 0xffffffff;
@@ -76,3 +76,46 @@ test('PID reuse or an executable change cannot authorize termination', () => {
   assert.deepEqual(descendants([owned, child, unrelated], [owned]), [owned, child]);
   assert.deepEqual(descendants([{ ...owned, createdAt: 'reused' }, child, unrelated], [owned]), []);
 });
+
+test('repairs an Electron package whose postinstall was skipped, then probes the binary', () => temporary(async (directory) => {
+  const packageRoot = join(directory, 'node_modules/electron');
+  await mkdir(packageRoot, { recursive: true });
+  await writeFile(join(packageRoot, 'package.json'), JSON.stringify({ version: ELECTRON_VERSION }));
+  const calls = [];
+  const run = async (command, args, cwd, env) => {
+    calls.push({ command, args, cwd, env });
+    if (args[0] === join(packageRoot, 'install.js')) {
+      await mkdir(join(packageRoot, 'dist'));
+      await writeFile(join(packageRoot, 'path.txt'), 'electron-test');
+      await writeFile(join(packageRoot, 'dist/electron-test'), 'test executable');
+      return { stdout: '' };
+    }
+    return { stdout: JSON.stringify({ electron: ELECTRON_VERSION, node: '22.23.2', executable: command }) };
+  };
+  const installed = await prepareElectronRuntime(packageRoot, {}, directory, run);
+  assert.equal(installed.executable, join(packageRoot, 'dist/electron-test'));
+  assert.equal(calls[0].command, process.execPath);
+  assert.equal(calls[0].args[0], join(packageRoot, 'install.js'));
+  assert.equal(calls[1].command, installed.executable);
+  assert.equal(calls[1].env.ELECTRON_RUN_AS_NODE, '1');
+  // A reuse must still prove the executable's identity; package.json is insufficient.
+  calls.length = 0;
+  await prepareElectronRuntime(packageRoot, {}, directory, run);
+  assert.equal(calls.length, 1);
+  await assert.rejects(prepareElectronRuntime(packageRoot, {}, directory, async () => ({ stdout: JSON.stringify({ node: '22.23.2' }) })), /Electron runtime/);
+}));
+
+test('macOS executable text paths preserve spaces and exclude other lsof file descriptors', () => {
+  const output = 'p123\nftxt\nn/selected runtime/bin/node\nftxt\nn/usr/lib/libSystem.B.dylib\nfcwd\nn/working directory\nf1\nn/tmp/output\n';
+  assert.deepEqual(executableTextPaths(output), ['/selected runtime/bin/node', '/usr/lib/libSystem.B.dylib']);
+});
+
+test('a bare executable resolves through the child PATH, including directories with spaces', () => temporary(async (directory) => {
+  const bin = join(directory, 'selected runtime');
+  await mkdir(bin);
+  const command = process.platform === 'win32' ? 'node.exe' : 'node';
+  const executable = join(bin, command);
+  await writeFile(executable, 'PATH resolution fixture', { mode: 0o755 });
+  assert.equal(await executableOnPath(command, { PATH: bin }, directory), executable);
+  await assert.rejects(executableOnPath(command, { PATH: join(directory, 'missing') }, directory), /Cannot resolve executable/);
+}));

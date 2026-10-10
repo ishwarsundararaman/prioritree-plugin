@@ -21,13 +21,27 @@ so changing the controller's Node version would not test a different Electron ru
 | Claude Code | `.claude-plugin/plugin.json` references `.mcp.json`: `${CLAUDE_PLUGIN_ROOT}/scripts/launch-work-map.cmd claude` | PATH first, then `CODEX_MCP_NODE_PATH` and bundled-runtime fallback |
 | Claude Desktop MCPB | `manifest.json` server `mcp_config.command` and `args`; Node or a real Electron binary with `ELECTRON_RUN_AS_NODE=1` | The host's supplied executable |
 
-The `.cmd` launchers are executable polyglot scripts: a POSIX shell dispatches to `.sh`,
-while cmd.exe uses the batch section. The POSIX configurations instead declare `sh
+In 1.13.3 the `.cmd` launchers dispatch to `.sh` when a shell explicitly reads them,
+but have no shebang for a direct POSIX spawn. The POSIX configurations declare `sh
 scripts/launch-work-map.sh codex/claude`; Claude's Windows variant explicitly declares
 `cmd.exe /d /c`. The checks load the manifest's actual referenced configuration and also
 test the platform variants. They never silently substitute an unreferenced POSIX file.
-The package builder has no OS-selection rule for these alternate files. In 1.13.3 the
+The 1.13.3 package builder has no OS-selection rule for these alternate files. In 1.13.3 the
 Codex default still says `cmd.exe` on macOS/Linux, which is expected to fail there.
+Claude Code's default `.cmd` also fails direct POSIX execution with ENOEXEC. These are
+product failures, independent of the runtime-identification checks.
+Releases that declare one portable configuration need no alternate files. The checks
+always exercise the referenced configuration and exercise unselected variants when shipped.
+
+Runtime identity uses `/proc/<pid>/exe` on Linux. On macOS it resolves lsof's executable
+`txt` descriptor, with `ps` comm plus the child's PATH as a fallback. A bare `node` is
+accepted only after resolving it to the selected runtime's real executable path.
+
+The temporary Electron installer requests npm lifecycle scripts, explicitly runs
+Electron's own `install.js` if `path.txt` or its binary is missing, and then executes
+that binary with `ELECTRON_RUN_AS_NODE=1`. The install receipt records the reported
+`process.versions.electron`, Node version and executable. Reused task-owned installs
+are probed again. Package metadata alone never qualifies as an Electron host.
 
 ## Evidence
 

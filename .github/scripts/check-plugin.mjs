@@ -118,7 +118,7 @@ async function validateManifests() {
       const config = await readJson(join(pluginRoot, entry)); manifests.push(join(directory, entry));
       assert(config.mcpServers?.prioritree_work_map, `${entry} has no work-map server`);
       const server = config.mcpServers.prioritree_work_map;
-      for (const value of [server.command, ...server.args]) if (/launch-work-map\.(?:cmd|sh)$/.test(value)) await access(contained(pluginRoot, resolve(pluginRoot, expand(value, pluginRoot).replaceAll('\\', '/'))));
+      for (const value of [server.command, ...server.args]) if (/launch-work-map\.(?:cmd|sh|mjs)$/.test(value)) await access(contained(pluginRoot, resolve(pluginRoot, expand(value, pluginRoot).replaceAll('\\', '/'))));
       if (server.cwd) await access(contained(root, resolve(pluginRoot, server.cwd)));
     }
     const launcher = join(directory, 'scripts/launch-work-map.sh');
@@ -307,13 +307,13 @@ async function runProduct(originalPlan, index, xdgFallback = false) {
     const snapshot = await processSnapshot();
     if (!run.birth && child.pid) {
       const birth = snapshot.find((item) => item.pid === child.pid);
-      if (birth) { run.birth = birth; run.createdAt = birth.createdAt; run.executable = await executablePath(birth); }
+      if (birth) { run.birth = birth; run.createdAt = birth.createdAt; run.executable = await executablePath(birth, { env, cwd: plan.cwd }); }
     }
     // A POSIX launcher may exec Node between snapshots. Keep its captured birth/parent
     // boundary, and permit only that expected runtime transition, never PID reuse.
     const currentRoot = snapshot.find((item) => item.pid === run.birth?.pid);
     if (currentRoot && currentRoot.createdAt === run.birth.createdAt && currentRoot.parentPid === run.birth.parentPid && !sameProcess(currentRoot, run.birth)) {
-      const executable = await executablePath(currentRoot), expected = await realpath(plan.electron ? plan.command : process.execPath);
+      const executable = await executablePath(currentRoot, { env, cwd: plan.cwd }), expected = await realpath(plan.electron ? plan.command : process.execPath);
       assert(executable === expected, 'Owned launcher changed to an unexpected executable; preserving it');
       run.birth = currentRoot; run.executable = executable;
     }
@@ -322,7 +322,7 @@ async function runProduct(originalPlan, index, xdgFallback = false) {
       try { owner = await readJson(join(store, filename)); } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
       const identity = snapshot.find((item) => item.pid === owner.pid);
       if (!identity || run.engines.some((item) => sameProcess(item, identity))) continue;
-      const executable = await executablePath(identity), allowed = executable === process.execPath || executable === plan.command || (isAbsolute(executable) && relative(store, executable).split(sep)[0] !== '..' && !isAbsolute(relative(store, executable)));
+      const executable = await executablePath(identity, { env, cwd: plan.cwd }), allowed = executable === await realpath(process.execPath) || executable === plan.command || (isAbsolute(executable) && relative(store, executable).split(sep)[0] !== '..' && !isAbsolute(relative(store, executable)));
       assert(allowed && Date.parse(identity.createdAt) >= Date.parse(run.createdAt) - 2000, `Engine ownership is ambiguous; preserving PID ${identity.pid}`);
       const ownerUrl = new URL(owner.url);
       assert.equal(ownerUrl.origin, url, 'Engine owner points at a different port');
@@ -369,7 +369,7 @@ async function runProduct(originalPlan, index, xdgFallback = false) {
       const hostSnapshot = await capture();
       run.hostIdentities = descendants(hostSnapshot, [run.birth]);
       const expectedRuntime = await realpath(plan.electron ? plan.command : process.execPath);
-      const runtimes = await Promise.all(run.hostIdentities.map(executablePath));
+      const runtimes = await Promise.all(run.hostIdentities.map((identity) => executablePath(identity, { env, cwd: plan.cwd })));
       const normalize = (path) => process.platform === 'win32' ? path.replaceAll('\\', '/').toLowerCase() : path;
       assert(runtimes.some((path) => normalize(path) === normalize(expectedRuntime)), `Host did not use the selected runtime ${expectedRuntime}; observed ${runtimes.join(', ')}`);
       run.selectedRuntime = expectedRuntime;
@@ -514,7 +514,9 @@ try {
     if (values.layout === 'repository' && values.phase === 'node' && !values.hosts) for (const [label, directory] of [['Codex POSIX variant', 'prioritree-work-map'], ['Claude Code platform variant', 'prioritree-work-map-claude']]) {
       if (process.platform === 'win32' && label.startsWith('Codex')) continue;
       const pluginRoot = join(root, 'plugins', directory), filename = process.platform === 'win32' ? '.mcp.windows.json' : '.mcp.posix.json';
-      const config = (await readJson(join(pluginRoot, filename))).mcpServers.prioritree_work_map;
+      let config;
+      try { config = (await readJson(join(pluginRoot, filename))).mcpServers.prioritree_work_map; }
+      catch (error) { if (error.code === 'ENOENT') continue; throw error; } // New releases need only the referenced .mcp.json.
       const plan = { label, command: expand(config.command, pluginRoot), args: config.args.map((value) => expand(value, pluginRoot)), cwd: pluginRoot, configFile: filename };
       await check(`${label}: lifecycle run`, () => runCheck(plan));
     }

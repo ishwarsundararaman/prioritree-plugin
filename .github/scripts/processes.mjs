@@ -1,8 +1,9 @@
 // Only inspect and stop processes whose birth identity was captured by this task.
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { realpath } from 'node:fs/promises';
-import { join } from 'node:path';
+import { constants } from 'node:fs';
+import { access, realpath } from 'node:fs/promises';
+import { basename, delimiter, isAbsolute, join, resolve } from 'node:path';
 
 const execute = promisify(execFile);
 export const delay = (ms) => new Promise((done) => setTimeout(done, ms));
@@ -42,8 +43,33 @@ export function descendants(snapshot, roots) {
   return [...owned.values()];
 }
 
-export async function executablePath(identity) {
+export function executableTextPaths(output) {
+  let text = false;
+  return output.split('\n').flatMap((field) => {
+    if (field.startsWith('f')) text = field === 'ftxt';
+    return text && field.startsWith('n') ? [field.slice(1)] : [];
+  });
+}
+
+export async function executableOnPath(command, env = process.env, cwd = process.cwd()) {
+  const candidates = isAbsolute(command) ? [command] : command.includes('/') ? [resolve(cwd, command)] : (env.PATH || '').split(delimiter).filter(Boolean).map((entry) => join(entry, command));
+  for (const candidate of candidates) try { await access(candidate, constants.X_OK); return await realpath(candidate); } catch { /* Try the next PATH entry. */ }
+  throw new Error(`Cannot resolve executable ${command} through the child's PATH`);
+}
+
+export async function executablePath(identity, { env = process.env, cwd = process.cwd() } = {}) {
   if (process.platform === 'linux') return realpath(`/proc/${identity.pid}/exe`);
+  if (process.platform === 'darwin') {
+    try {
+      // comm can be only "node" on macOS. lsof's txt descriptors contain the
+      // loaded executable and libraries; match the command name, preserving spaces.
+      const { stdout } = await execute('/usr/sbin/lsof', ['-a', '-p', String(identity.pid), '-d', 'txt', '-Ffn'], { timeout: 10000, maxBuffer: 1024 * 1024 });
+      for (const path of executableTextPaths(stdout)) if (basename(path) === basename(identity.executable)) {
+        try { await access(path, constants.X_OK); return await realpath(path); } catch { /* Fall back to the child launch environment. */ }
+      }
+    } catch { /* lsof may be unavailable or denied. ps + the child PATH is supported. */ }
+    return executableOnPath(identity.executable, env, cwd);
+  }
   return identity.executable;
 }
 

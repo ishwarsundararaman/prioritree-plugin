@@ -83,14 +83,14 @@ async function boundedCommand(executable, args, cwd, env, ledger, timeout = 3000
   const record = { owner: 'public-ci/platform-checks', pid: null, createdAt: new Date().toISOString(), executable, workingDirectory: cwd, purpose: args.join(' '), stopCommand: 'Await one-shot completion; SIGTERM exact captured descendants on timeout' };
   await json(ledger, record);
   const child = spawn(executable, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
-  let output = '', captured = [];
+  let output = '', stdout = '', stderr = '', captured = [];
   const completion = new Promise((done, fail) => {
     child.once('error', fail);
     child.once('exit', (code, signal) => done({ code, signal }));
   });
   void completion.catch(() => {});
-  child.stdout.on('data', (data) => { output = (output + data).slice(-16000); });
-  child.stderr.on('data', (data) => { output = (output + data).slice(-16000); });
+  child.stdout.on('data', (data) => { stdout = (stdout + data).slice(-16000); output = (output + data).slice(-16000); });
+  child.stderr.on('data', (data) => { stderr = (stderr + data).slice(-16000); output = (output + data).slice(-16000); });
   let timedOut = false;
   const timer = setTimeout(() => {
     timedOut = true;
@@ -108,14 +108,38 @@ async function boundedCommand(executable, args, cwd, env, ledger, timeout = 3000
     }
     const result = await completion;
     assert(!timedOut, `${executable} timed out`);
-    await writeFile(ledger + '.log', output);
     assert.equal(result.code, 0, `${executable} exited ${result.code ?? result.signal}: ${output.slice(-3000)}`);
+    return { stdout, stderr };
   } finally {
     clearTimeout(timer);
+    await writeFile(ledger + '.log', output);
     captured = [...captured, ...descendants(await processSnapshot(), captured)];
     await stopCapturedProcesses(captured);
     await json(ledger, { ...record, verifiedExited: true });
   }
+}
+
+export async function prepareElectronRuntime(packageRoot, env, directory, run = boundedCommand) {
+  const packageJson = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'utf8'));
+  assert.equal(packageJson.version, ELECTRON_VERSION);
+  const installedPath = async () => {
+    const executable = contained(packageRoot, join(packageRoot, 'dist', (await readFile(join(packageRoot, 'path.txt'), 'utf8')).trim()));
+    await access(executable);
+    return realpath(executable);
+  };
+  let executable;
+  try { executable = await installedPath(); } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    // npm can skip dependency lifecycle scripts. Invoke Electron's own downloader
+    // explicitly rather than treating a successfully installed JS package as a host.
+    await run(process.execPath, [join(packageRoot, 'install.js')], packageRoot, env, join(directory, 'install-process-postinstall.json'));
+    executable = await installedPath();
+  }
+  const probe = await run(executable, ['-p', 'JSON.stringify({electron:process.versions.electron,node:process.versions.node,executable:process.execPath})'], directory, { ...env, ELECTRON_RUN_AS_NODE: '1' }, join(directory, 'install-process-runtime-probe.json'), 30000);
+  const runtime = JSON.parse(probe.stdout.trim());
+  assert.equal(runtime.electron, ELECTRON_VERSION, 'Electron runtime must report the pinned process.versions.electron');
+  assert.equal(await realpath(runtime.executable), executable, 'Electron probe ran a different executable');
+  return { version: packageJson.version, executable, runtime };
 }
 
 export async function installElectron(directory) {
@@ -124,18 +148,30 @@ export async function installElectron(directory) {
   assert(major > 22 || (major === 22 && minor >= 12), 'Installing the pinned Electron package needs Node 22.12 or newer');
   let entries = [];
   try { entries = await (await import('node:fs/promises')).readdir(directory); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  let reuse = false;
   if (entries.length) {
     const owner = JSON.parse(await readFile(join(directory, 'task-owner.json'), 'utf8'));
     assert(owner.owner === 'public-ci/platform-checks' && owner.directory === directory, 'Refusing to install into a directory owned by another task');
     try {
       const installed = JSON.parse(await readFile(join(directory, 'electron-install.json'), 'utf8'));
       assert.equal(installed.version, ELECTRON_VERSION); await access(installed.executable);
-      console.log(`PASS reusing task-owned Electron ${installed.version} in ${directory}`);
-      return installed.executable;
+      reuse = true;
     } catch (error) { if (error.code !== 'ENOENT') throw error; }
   }
   await mkdir(directory, { recursive: true });
   await json(join(directory, 'task-owner.json'), { owner: 'public-ci/platform-checks', directory, purpose: `Temporary Electron ${ELECTRON_VERSION} install`, retirement: 'Remove after all Electron probes have exited; no shared npm caches are used' });
+  const profile = join(directory, 'install-profile');
+  await mkdir(profile, { recursive: true });
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) if (/^ELECTRON_|^electron_config_|^npm_config_(platform|arch|ignore_scripts)$|^NODE_OPTIONS$/i.test(key)) delete env[key];
+  Object.assign(env, { HOME: profile, USERPROFILE: profile, APPDATA: join(profile, 'appdata'), LOCALAPPDATA: join(profile, 'localappdata'), ELECTRON_CACHE: join(directory, 'electron-cache'), electron_config_cache: join(directory, 'electron-cache'), npm_config_userconfig: join(profile, 'empty.npmrc'), npm_config_globalconfig: join(profile, 'empty-global.npmrc') });
+  const packageRoot = join(directory, 'node_modules/electron');
+  if (reuse) {
+    const installed = await prepareElectronRuntime(packageRoot, env, directory);
+    await json(join(directory, 'electron-install.json'), installed);
+    console.log(`PASS reusing verified Electron ${installed.runtime.electron} in ${directory}`);
+    return installed.executable;
+  }
   const candidates = [join(dirname(process.execPath), 'node_modules/npm/bin/npm-cli.js'), join(dirname(process.execPath), '../lib/node_modules/npm/bin/npm-cli.js')];
   for (const entry of (process.env.PATH || '').split(process.platform === 'win32' ? ';' : ':')) {
     if (entry && process.platform === 'win32') candidates.push(join(entry, 'node_modules/npm/bin/npm-cli.js'));
@@ -144,17 +180,11 @@ export async function installElectron(directory) {
   let npm;
   for (const candidate of candidates) if (candidate.endsWith('.js')) try { await access(candidate); npm = candidate; break; } catch { /* Try the next runtime layout. */ }
   assert(npm, 'Cannot locate npm-cli.js beside the selected Node runtime or on PATH');
-  const profile = join(directory, 'install-profile');
-  await mkdir(profile, { recursive: true });
-  const env = { ...process.env, HOME: profile, USERPROFILE: profile, APPDATA: join(profile, 'appdata'), LOCALAPPDATA: join(profile, 'localappdata'), ELECTRON_CACHE: join(directory, 'electron-cache'), npm_config_userconfig: join(profile, 'empty.npmrc'), npm_config_globalconfig: join(profile, 'empty-global.npmrc') };
-  await boundedCommand(process.execPath, [npm, 'install', '--prefix', directory, '--cache', join(directory, 'npm-cache'), '--no-audit', '--no-fund', '--no-package-lock', `electron@${ELECTRON_VERSION}`], directory, env, join(directory, 'install-process.json'));
-  const packageRoot = join(directory, 'node_modules/electron'), packageJson = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'utf8'));
-  assert.equal(packageJson.version, ELECTRON_VERSION);
-  const executable = contained(packageRoot, join(packageRoot, 'dist', (await readFile(join(packageRoot, 'path.txt'), 'utf8')).trim()));
-  await access(executable);
-  await json(join(directory, 'electron-install.json'), { version: packageJson.version, executable });
-  console.log(`PASS Electron ${packageJson.version} installed in ${directory}`);
-  return executable;
+  await boundedCommand(process.execPath, [npm, 'install', '--prefix', directory, '--cache', join(directory, 'npm-cache'), '--no-audit', '--no-fund', '--no-package-lock', '--ignore-scripts=false', '--foreground-scripts', `electron@${ELECTRON_VERSION}`], directory, env, join(directory, 'install-process.json'));
+  const installed = await prepareElectronRuntime(packageRoot, env, directory);
+  await json(join(directory, 'electron-install.json'), installed);
+  console.log(`PASS Electron ${installed.runtime.electron} installed and executed in ${directory}`);
+  return installed.executable;
 }
 
 export async function downloadRelease(directory, expectedVersion) {
