@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { existsSync, realpathSync } from 'node:fs';
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
@@ -11,13 +11,13 @@ const shell = process.platform === 'win32' ? join(process.env.ProgramFiles || 'C
 async function temporary(fn) {
   const directory = await mkdtemp(join(tmpdir(), 'prioritree host stub with spaces '));
   try { await fn(directory); } finally {
-    assert.equal(dirname(resolve(directory)), resolve(tmpdir()), 'Only this task-created temp directory may be removed');
+    assert.equal(realpathSync.native(dirname(resolve(directory))), realpathSync.native(tmpdir()), 'Only this task-created temp directory may be removed');
     await rm(directory, { recursive: true, force: true });
   }
 }
 
 async function stub(directory) {
-  for (const name of ['scripts', 'server', 'empty-path']) await mkdir(join(directory, name));
+  for (const name of ['scripts', 'server', 'empty-path', 'codex']) await mkdir(join(directory, name));
   const declaration = { command: './scripts/launch-work-map', args: [], cwd: '.' };
   await writeFile(join(directory, '.mcp.json'), JSON.stringify({ mcpServers: { prioritree_work_map: declaration } }));
   await writeFile(join(directory, 'server/work-map.mjs'), `const deadline=setTimeout(()=>process.exit(2),8000); process.stdin.resume(); process.stdin.once('end',()=>{clearTimeout(deadline); console.log(JSON.stringify({pid:process.pid,runtime:process.execPath,argv:process.argv.slice(1),home:process.env.HOME,codexHome:process.env.CODEX_HOME}));});\n`);
@@ -35,18 +35,21 @@ async function verify(command, plan, env) {
   assert.equal(result.status, 0, result.error?.message || result.stderr);
   assert.equal(result.stderr, '');
   const report = JSON.parse(result.stdout.trim());
-  assert.equal(await realpath(report.runtime), await realpath(process.execPath));
-  assert.deepEqual(report.argv, [join(plan.cwd, 'server/work-map.mjs'), '--stub', 'argument with spaces']);
-  assert.equal(report.home, plan.cwd); assert.equal(report.codexHome, join(plan.cwd, 'codex'));
+  // Windows short names and macOS /var aliases identify the same real files.
+  assert.equal(realpathSync.native(report.runtime), realpathSync.native(process.execPath));
+  assert.equal(realpathSync.native(report.argv[0]), realpathSync.native(join(plan.cwd, 'server/work-map.mjs')));
+  assert.deepEqual(report.argv.slice(1), ['--stub', 'argument with spaces']);
+  assert.equal(realpathSync.native(report.home), realpathSync.native(plan.cwd));
+  assert.equal(realpathSync.native(report.codexHome), realpathSync.native(join(plan.cwd, 'codex')));
   assert(report.pid > 0, 'The stub reports its exact child identity after EOF');
 }
 
 test('Codex Windows lookup rejects the extensionless sh file and chooses .cmd via cwd/PATHEXT', () => temporary(async (directory) => {
   const { plan, env } = await stub(directory);
   // .MJS precedes .CMD deliberately; Codex ships no ambiguous .mjs sibling.
-  assert.equal(await whichInWindows(plan.command, env, directory, { pathExt: env.PATHEXT }), join(directory, 'scripts/launch-work-map.cmd'));
+  assert.equal(realpathSync.native(await whichInWindows(plan.command, env, directory, { pathExt: env.PATHEXT })), realpathSync.native(join(directory, 'scripts/launch-work-map.cmd')));
   const launch = await resolveHostLaunch(plan, env, { platform: 'win32', pathExt: env.PATHEXT });
-  assert.equal(launch.resolvedProgram, join(directory, 'scripts/launch-work-map.cmd'));
+  assert.equal(realpathSync.native(launch.resolvedProgram), realpathSync.native(join(directory, 'scripts/launch-work-map.cmd')));
   assert.match(launch.command, /cmd\.exe$/i); assert(launch.windowsVerbatimArguments);
 }));
 
@@ -70,10 +73,22 @@ test('Codex Unix executes the declared shebang script directly with no PATH Node
 test('Windows lookup respects PATH casing, PATHEXT order and lookup-failure fallback', () => temporary(async (directory) => {
   const bin = join(directory, 'bin'); await mkdir(bin);
   await writeFile(join(bin, 'helper.cmd'), '@echo off'); await writeFile(join(bin, 'helper.bat'), '@echo off');
-  assert.equal(await whichInWindows('helper', { Path: bin }, directory, { pathExt: '.BAT;.CMD' }), join(bin, 'helper.bat'));
-  assert.equal(await whichInWindows('helper', { Path: bin }, directory, { pathExt: '.CMD;.BAT' }), join(bin, 'helper.cmd'));
+  assert.equal(realpathSync.native(await whichInWindows('helper', { Path: bin }, directory, { pathExt: '.BAT;.CMD' })), realpathSync.native(join(bin, 'helper.bat')));
+  assert.equal(realpathSync.native(await whichInWindows('helper', { Path: bin }, directory, { pathExt: '.CMD;.BAT' })), realpathSync.native(join(bin, 'helper.cmd')));
   assert.equal(await whichInWindows('missing', { Path: bin }, directory, { pathExt: '.CMD' }), 'missing');
   assert.equal(await whichInWindows('./helper', { Path: bin }, directory, { pathExt: '.CMD' }), './helper', 'Relative commands with a separator do not search PATH');
+}));
+
+test('Codex stub identity stays strict when cwd is a filesystem alias', { skip: !existsSync(shell) }, () => temporary(async (directory) => {
+  const stage = join(directory, 'stage'), alias = join(directory, 'alias');
+  await mkdir(stage);
+  const { plan, env } = await stub(stage);
+  await symlink(stage, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  plan.cwd = alias; env.HOME = alias; env.CODEX_HOME = join(alias, 'codex');
+  assert.equal(realpathSync.native(await whichInWindows(plan.command, env, alias, { pathExt: env.PATHEXT })), realpathSync.native(join(stage, 'scripts/launch-work-map.cmd')));
+  const launch = await resolveHostLaunch(plan, env, { platform: 'linux' });
+  if (process.platform === 'win32') { launch.args = [launch.command, ...launch.args]; launch.command = shell; env.CODEX_MCP_NODE_PATH = process.execPath.replaceAll('\\', '/'); }
+  await verify(launch, plan, env);
 }));
 
 test('Claude Code keeps a plain node spawn and MCPB uses the selected host runtime', async () => {

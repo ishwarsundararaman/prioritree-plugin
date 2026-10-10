@@ -1,5 +1,6 @@
 // Test the harness's safety boundaries, not a reimplementation of the product.
 import assert from 'node:assert/strict';
+import { realpathSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -81,6 +82,7 @@ test('repairs an Electron package whose postinstall was skipped, then probes the
   const packageRoot = join(directory, 'node_modules/electron');
   await mkdir(packageRoot, { recursive: true });
   await writeFile(join(packageRoot, 'package.json'), JSON.stringify({ version: ELECTRON_VERSION }));
+  await writeFile(join(packageRoot, 'install.js'), '// Electron postinstall fixture');
   const calls = [];
   const run = async (command, args, cwd, env) => {
     calls.push({ command, args, cwd, env });
@@ -93,10 +95,10 @@ test('repairs an Electron package whose postinstall was skipped, then probes the
     return { stdout: JSON.stringify({ electron: ELECTRON_VERSION, node: '22.23.2', executable: command }) };
   };
   const installed = await prepareElectronRuntime(packageRoot, {}, directory, run);
-  assert.equal(installed.executable, join(packageRoot, 'dist/electron-test'));
-  assert.equal(calls[0].command, process.execPath);
-  assert.equal(calls[0].args[0], join(packageRoot, 'install.js'));
-  assert.equal(calls[1].command, installed.executable);
+  assert.equal(realpathSync.native(installed.executable), realpathSync.native(join(packageRoot, 'dist/electron-test')));
+  assert.equal(realpathSync.native(calls[0].command), realpathSync.native(process.execPath));
+  assert.equal(realpathSync.native(calls[0].args[0]), realpathSync.native(join(packageRoot, 'install.js')));
+  assert.equal(realpathSync.native(calls[1].command), realpathSync.native(installed.executable));
   assert.equal(calls[1].env.ELECTRON_RUN_AS_NODE, '1');
   // A reuse must still prove the executable's identity; package.json is insufficient.
   calls.length = 0;
@@ -116,6 +118,6 @@ test('a bare executable resolves through the child PATH, including directories w
   const command = process.platform === 'win32' ? 'node.exe' : 'node';
   const executable = join(bin, command);
   await writeFile(executable, 'PATH resolution fixture', { mode: 0o755 });
-  assert.equal(await executableOnPath(command, { PATH: bin }, directory), executable);
+  assert.equal(realpathSync.native(await executableOnPath(command, { PATH: bin }, directory)), realpathSync.native(executable));
   await assert.rejects(executableOnPath(command, { PATH: join(directory, 'missing') }, directory), /Cannot resolve executable/);
 }));
