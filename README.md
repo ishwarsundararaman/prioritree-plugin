@@ -13,8 +13,8 @@ Your AI can say a step is done. Only you can accept it.
 1. Download `prioritree.mcpb` from the
    [latest release](https://github.com/ishwarsundararaman/prioritree-plugin/releases/latest).
 2. Open the file and click **Install**.
-3. In a new chat, say **work map**. The map opens inside the chat and builds itself, biggest project
-   first.
+3. A small PrioriTree window opens. Click **Build my map**. The map fills in as it reads your chats,
+   biggest project first. If the window doesn't appear, start a new chat and say **PrioriTree**.
 
 **Codex** (verified on Windows):
 
@@ -30,7 +30,8 @@ codex plugin add prioritree-work-map@prioritree
 /plugin install prioritree-work-map@prioritree
 ```
 
-Then start a new chat and say **work map**.
+Then start a new chat and say **PrioriTree**. The first time, a small window also opens with one
+button: **Build my map**.
 
 ## What you get
 
@@ -58,7 +59,7 @@ The plugin and desk run on your computer and keep your map there. Optional onlin
 
 ## Status
 
-This is an early release (1.13.5). Automated checks run the installed plugin on Windows, Mac
+This is an early release (1.13.6). Automated checks run the installed plugin on Windows, Mac
 (Apple silicon and Intel) and Linux for every release: Claude Desktop, Codex and Claude Code.
 
 Feedback is welcome in [Issues](https://github.com/ishwarsundararaman/prioritree-plugin/issues).

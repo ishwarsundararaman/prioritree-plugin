@@ -21,8 +21,13 @@
         "CODEX_MANAGED_PACKAGE_ROOT",
         "PRIORITREE_CODEX_CLI",
         "PRIORITREE_WORK_STORE_DIR",
+        "PRIORITREE_MAP_PORT",
         "PRIORITREE_MORNING_HOUR",
-        "PRIORITREE_MORNING_MINUTE"
+        "PRIORITREE_MORNING_MINUTE",
+        "PRIORITREE_DESK_NO_OPEN",
+        "CI",
+        "NODE_ENV",
+        "VITEST"
       ],
       "tool_timeout_sec": 120
     }

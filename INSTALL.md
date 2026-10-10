@@ -13,7 +13,8 @@ source checkout or `npm install`.
    install anything else. PrioriTree's background engine uses Codex's Node runtime or Node.js on
    your PATH when either is available. Otherwise, the map builds and updates while Claude Desktop
    is open.
-3. Start a new chat and say **work map**.
+3. A small PrioriTree window opens. Click **Build my map**. If it doesn't appear, start a new chat
+   and say **PrioriTree**.
 
 ## Codex desktop app or CLI
 
@@ -22,7 +23,7 @@ codex plugin marketplace add ishwarsundararaman/prioritree-plugin
 codex plugin add prioritree-work-map@prioritree
 ```
 
-Then start a new chat and say **work map**. The plugin uses the Node runtime that Codex supplies.
+Then start a new chat and say **PrioriTree**. The plugin uses the Node runtime that Codex supplies.
 
 ## Claude Code
 
@@ -36,8 +37,9 @@ PATH.
 
 ## First run
 
-1. **Say "work map".** The map opens straight away, inside the chat in apps that show panels, or
-   in a local desk window otherwise.
+1. **Click Build my map.** The first time PrioriTree starts, a small window opens with this one
+   button. After that, just mention **PrioriTree** in a chat (for example "create my PrioriTree")
+   and the map opens: inside the chat in apps that show panels, or in a local window otherwise.
 2. **It builds itself, biggest project first.** It reads your local Codex chats from the last 14
    days and summarises each one with your own Codex. Installing and invoking the plugin authorizes
    this reading.

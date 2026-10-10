@@ -1,12 +1,17 @@
 {
   "name": "prioritree-work-map",
-  "version": "1.13.5",
+  "version": "1.13.6",
   "description": "Map your local Codex work into goals, initiatives and honest progress.",
   "author": {
     "name": "PrioriTree"
   },
   "skills": "./skills/",
   "mcpServers": "./.mcp.json",
+  "extensions": {
+    "com.openai": {
+      "onboardingSkill": "./skills/prioritree/SKILL.md"
+    }
+  },
   "interface": {
     "displayName": "PrioriTree Work Map",
     "shortDescription": "Map your local Codex work into goals, initiatives and honest progress.",

@@ -1,11 +1,12 @@
 ---
 name: work-map
-description: Open PrioriTree first for any work map, map my work, PrioriTree, what am I working on, open/show my map request. Build businesses, goals, initiatives and steps progressively in the map, most attention first. Resume known initiatives and record progress honestly.
+description: Open the map when the user mentions PrioriTree, @PrioriTree, create my PrioriTree, create my work map, build my map, show my map or work map. Start immediately and show progress in the map.
 ---
 
 # PrioriTree work map
 
-For ANY map request, your FIRST tool call is `open_work_map`. This includes setup, viewing,
+For PrioriTree, @PrioriTree, create my PrioriTree, create my work map, build my map,
+show my map or work map, your FIRST tool call is `open_work_map`. This includes setup, viewing,
 returning users and updates. The user watches their real PrioriTree build in the attached panel,
 or in the automatically opened local desk when the host cannot render MCP Apps.
 Keep chat to at most **two short lines**. Let the map show the detail. Never restate the map.
